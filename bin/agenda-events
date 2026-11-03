@@ -1,0 +1,53 @@
+#!/Users/ivan/rex/venv/bin/python
+"""Today's and tomorrow's events, straight from EventKit.
+
+Prints one event per line: day<TAB>time<TAB>title<TAB>calendar, where day is 0 for today
+and 1 for tomorrow. Prints DENIED if macOS has not granted calendar access.
+"""
+import datetime
+import sys
+import threading
+
+import EventKit
+import Foundation
+
+
+def main():
+    store = EventKit.EKEventStore.alloc().init()
+    done = threading.Event()
+    granted = {"ok": False}
+
+    def finished(ok, error):
+        granted["ok"] = bool(ok)
+        done.set()
+
+    if hasattr(store, "requestFullAccessToEventsWithCompletion_"):
+        store.requestFullAccessToEventsWithCompletion_(finished)
+    else:
+        store.requestAccessToEntityType_completion_(0, finished)
+
+    deadline = Foundation.NSDate.dateWithTimeIntervalSinceNow_(20)
+    loop = Foundation.NSRunLoop.currentRunLoop()
+    while not done.is_set() and Foundation.NSDate.date().compare_(deadline) < 0:
+        loop.runMode_beforeDate_(Foundation.NSDefaultRunLoopMode,
+                                 Foundation.NSDate.dateWithTimeIntervalSinceNow_(0.05))
+    if not granted["ok"]:
+        print("DENIED")
+        return 1
+
+    midnight = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start = Foundation.NSDate.dateWithTimeIntervalSince1970_(midnight.timestamp())
+    end = Foundation.NSDate.dateWithTimeIntervalSince1970_(midnight.timestamp() + 2 * 86400)
+    predicate = store.predicateForEventsWithStartDate_endDate_calendars_(start, end, None)
+    for event in store.eventsMatchingPredicate_(predicate) or []:
+        when = datetime.datetime.fromtimestamp(event.startDate().timeIntervalSince1970())
+        day = (when.date() - midnight.date()).days
+        label = "all day" if event.isAllDay() else when.strftime("%H:%M")
+        title = event.title() or "(untitled)"
+        calendar = event.calendar().title() if event.calendar() else ""
+        print(f"{day}\t{label}\t{title}\t{calendar}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

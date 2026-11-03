@@ -14,7 +14,7 @@ from textual.widgets import (Button, DataTable, Footer, Header, Label, Static,
                              TabbedContent, TabPane)
 
 HOME = os.path.expanduser("~")
-AGENDA_JS = os.path.join(HOME, "rex/bin/agenda-events.js")
+AGENDA = os.path.join(HOME, "rex/bin/agenda-events")
 DISCORD_CFG = os.path.expanduser("~/.config/rex-comms/discord.json")
 STATE = os.path.expanduser("~/.local/state/rex-comms")
 
@@ -106,8 +106,8 @@ class Feeds(App):
     def load_agenda(self):
         out = ""
         try:
-            out = subprocess.run(["osascript", "-l", "JavaScript", AGENDA_JS],
-                                 capture_output=True, text=True, timeout=40).stdout.strip()
+            out = subprocess.run([AGENDA], capture_output=True, text=True,
+                                 timeout=40).stdout.strip()
         except Exception:
             out = ""
         self.call_from_thread(self.paint_agenda, out)
@@ -128,7 +128,7 @@ class Feeds(App):
                 continue
             day, when, title, calendar = parts[0], parts[1], parts[2], parts[3]
             row = f"  [#5ad1c4]{when:<8}[/] {title}   [dim]{calendar}[/]"
-            (today if day == "0" else tomorrow).append(row)
+            (today if day in ("0", "-1") else tomorrow).append(row)
         text = [f"[b]{time.strftime('%A %d %B')}[/b]", ""]
         text += today or ["  [dim]nothing today[/]"]
         text += ["", f"[dim]{time.strftime('%a %d %b', time.localtime(time.time() + 86400))}[/dim]"]

@@ -55,6 +55,14 @@ Other sessions come back as their tabs and panes, each in the right directory.
 - `~/.config/rex/init.lua` — the `comms` action and the ⌥Space summon key
 - Keychain — `rex-gmail`, `rex-slack`, `rex-discord`
 
+## Calendar access
+
+Calendars are read by `bin/agenda-events`, a small EventKit program in the venv. It has to
+be that rather than `osascript`, which macOS treats as its own identity and refuses without
+ever prompting. Panes are children of **Rex Server** (`com.superlogical.rex.server`), a
+separate app from Rex Beta, so that is the entry to enable under Privacy & Security →
+Calendars. `tccutil reset Calendar com.superlogical.rex.server` clears a stale refusal.
+
 ## The TV
 
 The living room is a rooted webOS TV reached over `ssh tv`, with Shelf (the music app)
