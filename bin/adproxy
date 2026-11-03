@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""A filtering proxy for terminal browsing: refuses connections to ad and tracker
+domains so pages load without them. No TLS interception — blocked hosts simply get
+no tunnel. Listens on 127.0.0.1:8899."""
+import os, socket, sys, threading, urllib.request
+
+HOST, PORT = "127.0.0.1", 8899
+LIST = os.path.expanduser("~/.config/rex-comms/blocklist.txt")
+SRC = "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+
+def ensure_list():
+    if os.path.exists(LIST) and os.path.getsize(LIST) > 10000:
+        return
+    os.makedirs(os.path.dirname(LIST), exist_ok=True)
+    print("fetching blocklist…", file=sys.stderr)
+    with urllib.request.urlopen(SRC, timeout=60) as r:
+        data = r.read().decode("utf-8", "replace")
+    out = []
+    for line in data.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] in ("0.0.0.0", "127.0.0.1"):
+            d = parts[1].strip().lower()
+            if d not in ("localhost", "localhost.localdomain", "broadcasthost", "local"):
+                out.append(d)
+    with open(LIST, "w") as f:
+        f.write("\n".join(sorted(set(out))))
+
+def load():
+    ensure_list()
+    with open(LIST) as f:
+        return set(l.strip() for l in f if l.strip())
+
+BLOCKED = load()
+
+def is_blocked(host):
+    host = host.lower().strip(".")
+    parts = host.split(".")
+    for i in range(len(parts) - 1):
+        if ".".join(parts[i:]) in BLOCKED:
+            return True
+    return False
+
+def pipe(a, b):
+    try:
+        while True:
+            data = a.recv(65536)
+            if not data:
+                break
+            b.sendall(data)
+    except OSError:
+        pass
+    finally:
+        for s in (a, b):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+def handle(client):
+    try:
+        client.settimeout(20)
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = client.recv(4096)
+            if not chunk:
+                return
+            buf += chunk
+            if len(buf) > 65536:
+                return
+        head, _, rest = buf.partition(b"\r\n\r\n")
+        lines = head.decode("latin-1").split("\r\n")
+        method, target, _ = (lines[0].split(" ") + ["", ""])[:3]
+
+        if method == "CONNECT":
+            host, _, port = target.partition(":")
+            port = int(port or 443)
+        else:
+            host, port = "", 80
+            for l in lines[1:]:
+                if l.lower().startswith("host:"):
+                    host = l.split(":", 1)[1].strip()
+                    if ":" in host:
+                        host, p = host.rsplit(":", 1)
+                        port = int(p)
+                    break
+            if not host:
+                return
+
+        if is_blocked(host):
+            client.sendall(b"HTTP/1.1 403 Blocked\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            return
+
+        upstream = socket.create_connection((host, port), timeout=20)
+        if method == "CONNECT":
+            client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        else:
+            upstream.sendall(head + b"\r\n\r\n" + rest)
+        client.settimeout(None)
+        upstream.settimeout(None)
+        threading.Thread(target=pipe, args=(client, upstream), daemon=True).start()
+        pipe(upstream, client)
+    except Exception:
+        pass
+    finally:
+        try:
+            client.close()
+        except OSError:
+            pass
+
+def main():
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind((HOST, PORT))
+    srv.listen(128)
+    print(f"adproxy on {HOST}:{PORT}, blocking {len(BLOCKED)} domains", flush=True)
+    while True:
+        conn, _ = srv.accept()
+        threading.Thread(target=handle, args=(conn,), daemon=True).start()
+
+if __name__ == "__main__":
+    main()

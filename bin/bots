@@ -1,0 +1,17 @@
+#!/bin/sh
+# Pick a bot to chat with. Add more in ~/.config/rex-comms/bots.tsv (name<TAB>command).
+list=~/.config/rex-comms/bots.tsv
+[ -f "$list" ] || cat > "$list" <<'TSV'
+claude	claude
+codex	codex
+TSV
+if [ -n "$1" ]; then
+  line=$(grep -i "^$1	" "$list" | head -1)
+else
+  line=$(awk -F'\t' '{printf "%-12s %s\n", $1, $2}' "$list" | fzf --height=100% --reverse \
+         --prompt='bot > ' --header='enter to chat, ctrl-c to leave')
+  line=$(echo "$line" | awk '{print $1}' | xargs -I{} grep -i "^{}	" "$list" | head -1)
+fi
+[ -n "$line" ] || exit 0
+cmd=$(printf '%s' "$line" | cut -f2-)
+exec $cmd

@@ -1,0 +1,34 @@
+#!/bin/sh
+# Browse in a pane, without ads or popups.
+#   web                 open index.hr
+#   web <url>           open a page
+PROFILE="$HOME/.local/state/rex-comms/carbonyl"
+LOG="${TMPDIR:-/tmp}/rex-adproxy.log"
+mkdir -p "$PROFILE"
+
+if ! nc -z 127.0.0.1 8899 2>/dev/null; then
+  nohup "$HOME/rex/bin/adproxy" >"$LOG" 2>&1 &
+  i=0
+  while [ $i -lt 60 ] && ! nc -z 127.0.0.1 8899 2>/dev/null; do
+    sleep 0.5
+    i=$((i + 1))
+  done
+fi
+
+EXTRA=""
+if [ "$1" = "--text" ]; then
+  EXTRA="--blink-settings=forceDarkModeEnabled=true,darkModeInversionAlgorithm=4,imagesEnabled=false"
+  shift
+fi
+
+exec carbonyl $EXTRA \
+  --proxy-server="127.0.0.1:8899" \
+  --user-data-dir="$PROFILE" \
+  --block-new-web-contents \
+  --force-dark-mode \
+  --enable-features=WebContentsForceDark \
+  --blink-settings=forceDarkModeEnabled=true,darkModeInversionAlgorithm=4 \
+  --disable-notifications \
+  --no-default-browser-check \
+  --disable-background-networking \
+  "${1:-https://index.hr}"

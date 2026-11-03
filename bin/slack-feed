@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Slack DMs and mentions in a pane. Token comes from Keychain (service: rex-slack)."""
+import json, os, subprocess, sys, time, urllib.parse, urllib.request
+
+STATE = os.path.expanduser("~/.local/state/rex-comms/slack.json")
+API = "https://slack.com/api/"
+DIM, B, CYAN, YEL, R = "\033[2m", "\033[1m", "\033[36m", "\033[33m", "\033[0m"
+
+SETUP = f"""{B}Slack is not connected yet.{R}
+
+1. Create an app at {CYAN}https://api.slack.com/apps?new_app=1{R} from the manifest at
+   {CYAN}~/.config/rex-comms/slack-manifest.yaml{R}
+2. Install it to the encore.dev workspace and copy the {B}User{R} OAuth token (xoxp-...)
+3. Store it:  {CYAN}security add-generic-password -s rex-slack -a slack -w{R}
+   (run it, then paste the token at the prompt)
+"""
+
+def token():
+    try:
+        out = subprocess.run(["security", "find-generic-password", "-s", "rex-slack", "-w"],
+                             capture_output=True, text=True, timeout=10)
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+def call(tok, method, **params):
+    url = API + method + ("?" + urllib.parse.urlencode(params) if params else "")
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + tok})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.load(r)
+
+def load():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except Exception:
+        return {"seen": {}, "users": {}}
+
+def save(st):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    with open(STATE, "w") as f:
+        json.dump(st, f)
+
+def name_of(tok, st, uid):
+    if not uid:
+        return "?"
+    if uid in st["users"]:
+        return st["users"][uid]
+    try:
+        info = call(tok, "users.info", user=uid)
+        n = info.get("user", {}).get("profile", {}).get("display_name") or \
+            info.get("user", {}).get("real_name") or uid
+    except Exception:
+        n = uid
+    st["users"][uid] = n
+    return n
+
+def clean(text, tok, st):
+    out = []
+    for part in text.split("<"):
+        if ">" in part and part.startswith("@"):
+            uid, rest = part.split(">", 1)
+            out.append("@" + name_of(tok, st, uid[1:].split("|")[0]) + rest)
+        elif ">" in part:
+            link, rest = part.split(">", 1)
+            out.append((link.split("|")[-1]) + rest)
+        else:
+            out.append(part)
+    return " ".join("".join(out).split())[:160]
+
+def run(tok, first):
+    st = load()
+    me = call(tok, "auth.test").get("user_id")
+    rows = []
+
+    convos = call(tok, "users.conversations", types="im,mpim", exclude_archived="true", limit=100)
+    for c in convos.get("channels", []):
+        cid = c["id"]
+        since = st["seen"].get(cid)
+        params = {"channel": cid, "limit": 3 if first else 10}
+        if since:
+            params["oldest"] = since
+        try:
+            hist = call(tok, "conversations.history", **params)
+        except Exception:
+            continue
+        msgs = [m for m in hist.get("messages", []) if m.get("ts") != since and m.get("user") != me]
+        if not msgs:
+            continue
+        who = name_of(tok, st, c.get("user")) if c.get("is_im") else "group"
+        for m in reversed(msgs):
+            rows.append((float(m["ts"]), who, name_of(tok, st, m.get("user")), clean(m.get("text", ""), tok, st)))
+        if hist.get("messages"):
+            st["seen"][cid] = hist["messages"][0]["ts"]
+
+    try:
+        res = call(tok, "search.messages", query=f"<@{me}>", sort="timestamp", count=10)
+        for m in res.get("messages", {}).get("matches", []):
+            rows.append((float(m["ts"]), "#" + m.get("channel", {}).get("name", "?"),
+                         m.get("username", "?"), clean(m.get("text", ""), tok, st)))
+    except Exception:
+        pass
+
+    save(st)
+    rows.sort(key=lambda r: r[0])
+    return rows[-25:]
+
+def main():
+    watch = "--watch" in sys.argv
+    tok = token()
+    if not tok:
+        print(SETUP)
+        return 1
+    first = True
+    while True:
+        rows = run(tok, first)
+        if first:
+            print(f"{DIM}slack: dms and mentions{R}\n")
+        for ts, where, who, text in rows:
+            when = time.strftime("%H:%M", time.localtime(ts))
+            print(f"{DIM}{when}{R} {CYAN}{where[:14]:<14}{R} {B}{who[:12]:<12}{R} {text}")
+        if not watch:
+            return 0
+        first = False
+        time.sleep(30)
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,312 @@
+#!/Users/ivan/rex/venv/bin/python
+"""Every open pull request across the org, in a pane you click.
+
+Rows come from a GitHub search. Clicking one loads its checks and its live preview
+deployment; the buttons open the preview in a browser pane, read the diff, open GitHub,
+or squash and merge after you confirm.
+"""
+import json
+import os
+import re
+import subprocess
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Footer, Header, Label, Static
+
+ORG = "encoredev"
+PINNED = ["encoredev/www", "encoredev/examples"]
+ME = "ivancernja"
+
+OK_STATES = {"SUCCESS", "NEUTRAL", "SKIPPED"}
+BAD_STATES = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"}
+
+
+def gh(*args):
+    return subprocess.run(["gh", *args], capture_output=True, text=True).stdout
+
+
+def search_prs():
+    out = gh("search", "prs", "--owner", ORG, "--state", "open", "--limit", "100",
+             "--json", "number,title,repository,author,updatedAt,isDraft,url")
+    try:
+        rows = json.loads(out)
+    except Exception:
+        return []
+    for row in rows:
+        row["repo"] = row["repository"]["nameWithOwner"]
+        row["login"] = (row.get("author") or {}).get("login", "")
+    rows.sort(key=lambda r: (r["repo"] not in PINNED, r["updatedAt"]), reverse=False)
+    rows.sort(key=lambda r: r["updatedAt"], reverse=True)
+    rows.sort(key=lambda r: r["repo"] not in PINNED)
+    return rows
+
+
+def checks_for(repo, number):
+    out = gh("pr", "view", str(number), "-R", repo, "--json",
+             "statusCheckRollup,headRefOid,reviewDecision,mergeable,additions,deletions,changedFiles")
+    try:
+        return json.loads(out)
+    except Exception:
+        return {}
+
+
+def check_summary(rollup):
+    if not rollup:
+        return "–"
+    ok = bad = running = 0
+    for check in rollup:
+        state = (check.get("conclusion") or check.get("state") or "").upper()
+        if state in OK_STATES:
+            ok += 1
+        elif state in BAD_STATES:
+            bad += 1
+        else:
+            running += 1
+    if bad:
+        return f"{bad} failing"
+    if running:
+        return f"{running} running"
+    return f"{ok} passing"
+
+
+def preview_url(repo, sha, number):
+    if sha:
+        try:
+            deployments = json.loads(gh("api", f"repos/{repo}/deployments?sha={sha}&per_page=10"))
+        except Exception:
+            deployments = []
+        deployments.sort(key=lambda d: d.get("environment", "") != "Preview")
+        for deployment in deployments[:3]:
+            try:
+                statuses = json.loads(gh("api", f"repos/{repo}/deployments/{deployment['id']}/statuses?per_page=10"))
+            except Exception:
+                continue
+            for status in statuses:
+                if status.get("state") == "success" and status.get("environment_url"):
+                    return status["environment_url"]
+    body = gh("pr", "view", str(number), "-R", repo, "--json", "comments")
+    found = re.findall(r"https://[a-z0-9._-]*vercel\.app[^\s)\"]*", body)
+    return found[-1] if found else ""
+
+
+class Confirm(ModalScreen[bool]):
+    CSS = """
+    Confirm { align: center middle; }
+    #box { width: 60; height: auto; padding: 1 2; background: #1d242e; border: tall #5ad1c4; }
+    #box Label { margin-bottom: 1; }
+    """
+
+    def __init__(self, question):
+        super().__init__()
+        self.question = question
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="box"):
+            yield Label(self.question)
+            with Horizontal():
+                yield Button("Merge it", id="yes", variant="primary")
+                yield Button("Cancel", id="no")
+
+    @on(Button.Pressed)
+    def answer(self, event: Button.Pressed):
+        self.dismiss(event.button.id == "yes")
+
+
+class PRs(App):
+    CSS = """
+    Screen { background: #11151c; color: #c9d3df; }
+    #filters { height: auto; padding: 1 2 0 2; }
+    #filters Button { margin-right: 1; min-width: 12; }
+    Button { background: #1d242e; color: #c9d3df; border: none; }
+    Button:hover { background: #26303c; color: #5ad1c4; }
+    Button.on { background: #5ad1c4; color: #11151c; }
+    DataTable { height: 1fr; margin: 1 2 0 2; background: #11151c; }
+    DataTable > .datatable--header { background: #171d26; color: #71808f; text-style: bold; }
+    DataTable > .datatable--cursor { background: #26303c; }
+    #detail { height: 17; padding: 1 2; background: #151b23; border-top: solid #262e3a; }
+    #title { text-style: bold; }
+    .dim { color: #71808f; }
+    #checks { height: 7; color: #c9d3df; }
+    #actions { height: auto; margin-top: 1; }
+    #actions Button { margin-right: 1; min-width: 16; }
+    #note { color: #71808f; height: auto; }
+    """
+    BINDINGS = [("q", "quit", "Quit"), ("r", "reload", "Refresh")]
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self.shown = []
+        self.filter = "pinned"
+        self.selected = None
+        self.preview = ""
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Horizontal(id="filters"):
+            yield Button("www + examples", id="f-pinned", classes="on")
+            yield Button("Everything", id="f-all")
+            yield Button("Mine", id="f-mine")
+            yield Button("Refresh", id="reload")
+        yield DataTable(cursor_type="row", zebra_stripes=False)
+        with Vertical(id="detail"):
+            yield Label("loading pull requests…", id="title")
+            yield Label("", id="meta", classes="dim")
+            yield VerticalScroll(Static("", id="checks"))
+            with Horizontal(id="actions"):
+                yield Button("Open preview", id="a-preview", variant="primary")
+                yield Button("Read diff", id="a-diff")
+                yield Button("GitHub", id="a-web")
+                yield Button("Merge", id="a-merge")
+            yield Label("", id="note")
+        yield Footer()
+
+    def on_mount(self):
+        self.title = "Pull requests"
+        table = self.query_one(DataTable)
+        table.add_columns("repo", "#", "title", "author", "updated")
+        self.load()
+
+    # data ---------------------------------------------------------------
+
+    @work(thread=True, exclusive=True)
+    def load(self):
+        rows = search_prs()
+        self.call_from_thread(self.paint_rows, rows)
+
+    def paint_rows(self, rows):
+        self.rows = rows
+        self.apply_filter()
+
+    def apply_filter(self):
+        if self.filter == "pinned":
+            shown = [r for r in self.rows if r["repo"] in PINNED]
+        elif self.filter == "mine":
+            shown = [r for r in self.rows if r["login"] == ME]
+        else:
+            shown = list(self.rows)
+        self.shown = shown
+        table = self.query_one(DataTable)
+        table.clear()
+        for row in shown:
+            draft = " [dim](draft)[/]" if row.get("isDraft") else ""
+            table.add_row(row["repo"].split("/")[-1], str(row["number"]),
+                          row["title"][:70] + draft, row["login"], row["updatedAt"][5:10])
+        self.query_one("#note", Label).update(f"{len(shown)} open")
+        if shown:
+            table.move_cursor(row=0)
+            self.show_detail(0)
+
+    @on(DataTable.RowHighlighted)
+    def highlighted(self, event: DataTable.RowHighlighted):
+        self.show_detail(event.cursor_row)
+
+    def show_detail(self, index):
+        if not (0 <= index < len(self.shown)):
+            return
+        row = self.shown[index]
+        self.selected = row
+        self.preview = ""
+        self.query_one("#title", Label).update(row["title"])
+        self.query_one("#meta", Label).update(
+            f"{row['repo']} #{row['number']}  by {row['login']}")
+        self.query_one("#checks", Static).update("[dim]loading checks and preview…[/]")
+        self.load_detail(row)
+
+    @work(thread=True, exclusive=True)
+    def load_detail(self, row):
+        data = checks_for(row["repo"], row["number"])
+        url = preview_url(row["repo"], data.get("headRefOid", ""), row["number"])
+        self.call_from_thread(self.paint_detail, row, data, url)
+
+    def paint_detail(self, row, data, url):
+        if not self.selected or self.selected["number"] != row["number"]:
+            return
+        self.preview = url
+        lines = []
+        for check in (data.get("statusCheckRollup") or [])[:6]:
+            state = (check.get("conclusion") or check.get("state") or "").upper()
+            mark = "[#7ad17b]✓[/]" if state in OK_STATES else (
+                "[#e06c75]✗[/]" if state in BAD_STATES else "[#e3b341]◐[/]")
+            name = (check.get("name") or check.get("context") or "")[:44]
+            lines.append(f"  {mark} {name:<44} [dim]{state.lower()}[/]")
+        review = (data.get("reviewDecision") or "").replace("_", " ").lower() or "no review yet"
+        files = data.get("changedFiles", 0)
+        lines.append("")
+        lines.append(f"  [dim]review[/] {review}    [dim]files[/] {files}"
+                     f"    [#7ad17b]+{data.get('additions', 0)}[/] [#e06c75]-{data.get('deletions', 0)}[/]")
+        lines.append(f"  [dim]preview[/] [#5ad1c4]{url or '— none found'}[/]")
+        self.query_one("#checks", Static).update("\n".join(lines))
+
+    # actions ------------------------------------------------------------
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed):
+        bid = event.button.id or ""
+        if bid.startswith("f-"):
+            self.filter = bid[2:]
+            for button in self.query("#filters Button"):
+                button.set_class(button.id == bid, "on")
+            self.apply_filter()
+        elif bid == "reload":
+            self.query_one("#note", Label).update("refreshing…")
+            self.load()
+        elif bid == "a-preview":
+            self.open_preview()
+        elif bid == "a-diff":
+            self.open_diff()
+        elif bid == "a-web" and self.selected:
+            subprocess.run(["gh", "pr", "view", str(self.selected["number"]),
+                            "-R", self.selected["repo"], "--web"], capture_output=True)
+            self.query_one("#note", Label).update("opened on github.com")
+        elif bid == "a-merge" and self.selected:
+            self.ask_merge()
+
+    def open_preview(self):
+        if not self.preview:
+            self.query_one("#note", Label).update("no preview deployment on this one")
+            return
+        self.run_in_pane("Preview", [os.path.expanduser("~/rex/bin/web"), self.preview])
+        self.query_one("#note", Label).update(f"opened {self.preview} in a pane")
+
+    def open_diff(self):
+        if not self.selected:
+            return
+        repo, number = self.selected["repo"], self.selected["number"]
+        self.run_in_pane("Diff", ["sh", "-c",
+                                  f"gh pr diff {number} -R {repo} | delta --paging=always"])
+        self.query_one("#note", Label).update(f"diff for #{number} opened in a pane")
+
+    def run_in_pane(self, label, argv):
+        session = os.environ.get("REX_SESSION")
+        if not session:
+            subprocess.Popen(argv)
+            return
+        subprocess.run(["rex", "run", "-s", session, "--label", label, "--keep-open",
+                        "--focus=false", "--"] + argv, capture_output=True)
+
+    @work
+    async def ask_merge(self):
+        row = self.selected
+        yes = await self.push_screen_wait(
+            Confirm(f"Squash and merge {row['repo']} #{row['number']}?\n{row['title'][:60]}"))
+        if yes:
+            self.do_merge(row)
+
+    @work(thread=True)
+    def do_merge(self, row):
+        result = subprocess.run(["gh", "pr", "merge", str(row["number"]), "-R", row["repo"],
+                                 "--squash"], capture_output=True, text=True)
+        message = (result.stdout or result.stderr).strip().split("\n")[0][:90]
+        self.call_from_thread(self.query_one("#note", Label).update, message or "merged")
+        self.load()
+
+    def action_reload(self):
+        self.load()
+
+
+if __name__ == "__main__":
+    PRs().run()

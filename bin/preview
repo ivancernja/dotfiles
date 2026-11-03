@@ -1,0 +1,8 @@
+#!/bin/sh
+# Look at an image, PDF page, or video frame without leaving the terminal.
+#   preview <file|url>
+[ -n "$1" ] || { echo "usage: preview <file|url>"; exit 2; }
+case "$1" in
+  *.pdf) exec mpv --vo=tct --really-quiet --image-display-duration=inf "$1" ;;
+  *)     exec mpv --vo=tct --really-quiet --image-display-duration=inf --no-audio "$1" ;;
+esac

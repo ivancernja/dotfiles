@@ -1,0 +1,49 @@
+#!/bin/sh
+# Today and tomorrow, from Calendar. Tries two routes, because macOS guards calendar data:
+#   1. a Shortcut named "Agenda" (Shortcuts already has calendar access)
+#   2. EventKit via osascript, which needs Calendar access granted to Rex
+# Usage: agenda [--watch]
+JS="$HOME/rex/bin/agenda-events.js"
+TMP="${TMPDIR:-/tmp}/rex-agenda.$$"
+
+fetch() {
+  if shortcuts list 2>/dev/null | grep -qx "Agenda"; then
+    if shortcuts run "Agenda" -o "$TMP" --output-type public.plain-text >/dev/null 2>&1 && [ -s "$TMP" ]; then
+      cat "$TMP"; rm -f "$TMP"; return 0
+    fi
+    rm -f "$TMP"
+  fi
+  out=$(osascript -l JavaScript "$JS" 2>/dev/null)
+  if [ -n "$out" ] && [ "$out" != "DENIED" ]; then
+    printf '%s\n' "$out" | awk -F'\t' '{ printf "%s  %-7s %s\n", ($1=="0" ? "today   " : "tomorrow"), $2, $3 }' | sort -k1,1r -k2,2
+    return 0
+  fi
+  return 1
+}
+
+show() {
+  printf '\033[2J\033[H'
+  printf '\033[1m%s\033[0m\n\n' "$(date '+%A %d %B')"
+  if events=$(fetch) && [ -n "$events" ]; then
+    printf '%s\n' "$events"
+  elif [ -n "$events" ]; then
+    printf '\033[2m  nothing on the calendar\033[0m\n'
+  else
+    cat <<'MSG'
+  Calendar is not readable from here yet. Pick one:
+
+  a) System Settings → Privacy & Security → Calendars → turn on Rex Beta,
+     then press any key in this pane to retry.
+
+  b) Make a Shortcut called "Agenda": Find Calendar Events (today) →
+     Format → Text. This pane picks it up with no permission grant.
+MSG
+  fi
+  printf '\n\033[2mrefreshed %s\033[0m\n' "$(date '+%H:%M')"
+}
+
+if [ "$1" = "--watch" ]; then
+  while :; do show; sleep 600; done
+else
+  show
+fi

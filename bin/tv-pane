@@ -1,0 +1,346 @@
+#!/Users/ivan/rex/venv/bin/python
+"""The living room as a pane you click: put on an album, open an app, work the volume."""
+import json
+import os
+import re
+import socket
+import subprocess
+import time
+import urllib.request
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.containers import Container, Horizontal, Vertical
+from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
+                             TabbedContent, TabPane)
+
+CFG = os.path.expanduser("~/.config/rex-comms/tv.json")
+
+
+def config():
+    try:
+        with open(CFG) as f:
+            return json.load(f)
+    except Exception:
+        return {"host": "tv", "apps": []}
+
+
+def ssh(host, command, timeout=12):
+    try:
+        p = subprocess.run(["ssh", "-o", "ConnectTimeout=6", "-o", "BatchMode=yes", host, command],
+                           capture_output=True, text=True, timeout=timeout)
+        return p.stdout.strip()
+    except Exception:
+        return ""
+
+
+def luna(host, uri, payload="{}"):
+    return ssh(host, f"luna-send -n 1 -f '{uri}' '{payload}'")
+
+
+def minutes(seconds):
+    try:
+        return f"{int(seconds) // 60}m"
+    except Exception:
+        return ""
+
+
+class TVPane(App):
+    CSS = """
+    Screen { background: #11151c; color: #c9d3df; }
+    #status { height: auto; padding: 1 2; background: #171d26; border-bottom: solid #262e3a; }
+    #state { text-style: bold; }
+    .dim { color: #71808f; }
+    .section { color: #71808f; text-style: bold; margin: 1 0 0 0; }
+    Button { background: #1d242e; color: #c9d3df; border: none; margin: 0 1 1 0; min-width: 13; }
+    Button:hover { background: #26303c; color: #5ad1c4; }
+    Button.on { background: #5ad1c4; color: #11151c; }
+    Horizontal { height: auto; }
+    Input { background: #1d242e; border: tall #262e3a; color: #c9d3df; }
+    Input:focus { border: tall #5ad1c4; }
+    #search { width: 40; margin-right: 2; }
+    DataTable { height: 1fr; background: #11151c; }
+    DataTable > .datatable--header { background: #171d26; color: #71808f; text-style: bold; }
+    DataTable > .datatable--cursor { background: #26303c; }
+    #apps { height: auto; layout: grid; grid-size: 6; grid-rows: 3; grid-gutter: 0 1; }
+    TabbedContent { height: 1fr; }
+    Tabs { background: #171d26; }
+    #note { height: auto; padding: 0 2 1 2; color: #71808f; }
+    """
+    BINDINGS = [("q", "quit", "Quit"), ("r", "refresh", "Refresh")]
+
+    def __init__(self):
+        super().__init__()
+        self.cfg = config()
+        self.host = self.cfg.get("host", "tv")
+        self.shelf = self.cfg.get("shelf", "")
+        self.library = {"albums": [], "concerts": []}
+        self.kind = "albums"
+        self.shown = []
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Vertical(id="status"):
+            yield Label("checking the tv…", id="state")
+            yield Label("", id="detail", classes="dim")
+        with TabbedContent(initial="music"):
+            with TabPane("Music", id="music"):
+                with Horizontal():
+                    yield Input(placeholder="filter by artist or title", id="search")
+                    yield Button("Albums", id="k-albums", classes="on")
+                    yield Button("Concerts", id="k-concerts")
+                    yield Button("Shuffle play", id="shuffle")
+                yield DataTable(cursor_type="row", id="library")
+                with Horizontal():
+                    yield Button("Play", id="play", variant="primary")
+                    yield Button("Pause", id="pause")
+                    yield Button("Previous", id="previous")
+                    yield Button("Next", id="next")
+                    yield Button("Stop", id="stop")
+            with TabPane("Apps", id="apps-tab"):
+                yield Container(id="apps")
+            with TabPane("Volume", id="vol-tab"):
+                with Horizontal():
+                    yield Button("−", id="vol-down")
+                    yield Button("+", id="vol-up")
+                    yield Button("Mute", id="mute")
+                    yield Button("10", id="vol-10")
+                    yield Button("20", id="vol-20")
+                    yield Button("40", id="vol-40")
+                yield Label("ON SCREEN", classes="section")
+                with Horizontal():
+                    yield Input(placeholder="search youtube, or paste a link", id="yt")
+                    yield Button("Play on TV", id="yt-go", variant="primary")
+                with Horizontal():
+                    yield Input(placeholder="open a web page on the tv", id="web")
+                    yield Button("Open", id="web-go")
+                with Horizontal():
+                    yield Input(placeholder="put a message on screen", id="say")
+                    yield Button("Say", id="say-go")
+                yield Label("POWER", classes="section")
+                with Horizontal():
+                    yield Button("Screen off", id="off")
+                    yield Button("Wake", id="wake")
+                    yield Button("Refresh", id="refresh")
+        yield Label("", id="note")
+        yield Footer()
+
+    def on_mount(self):
+        self.title = "Living room"
+        self.query_one("#library", DataTable).add_columns("artist", "title", "year", "tracks", "length")
+        apps = self.query_one("#apps", Container)
+        for app in self.cfg.get("apps", []):
+            button = Button(app["name"], id="app-" + re.sub(r"\W", "-", app["id"]))
+            button.tooltip = app["id"]
+            apps.mount(button)
+        self.refresh_status()
+        self.load_library()
+        self.set_interval(20, self.refresh_status)
+
+    def note(self, text):
+        self.query_one("#note", Label).update(text)
+
+    @work(thread=True, exclusive=True)
+    def refresh_status(self):
+        awake = bool(ssh(self.host, "echo ok"))
+        app = volume = ""
+        if awake:
+            try:
+                app = json.loads(luna(self.host,
+                    "luna://com.webos.applicationManager/getForegroundAppInfo")).get("appId", "")
+            except Exception:
+                app = ""
+            try:
+                raw = json.loads(luna(self.host, "luna://com.webos.service.audio/master/getVolume"))
+                volume = str(raw.get("volume", raw.get("volumeStatus", {}).get("volume", "")))
+            except Exception:
+                volume = ""
+        self.call_from_thread(self.paint_status, awake, app, volume)
+
+    def paint_status(self, awake, app, volume):
+        names = {a["id"]: a["name"] for a in self.cfg.get("apps", [])}
+        if awake:
+            self.query_one("#state", Label).update("[#7ad17b]awake[/]")
+            self.query_one("#detail", Label).update(
+                f"on screen  {names.get(app, app or '-')}      volume  {volume or '-'}")
+        else:
+            self.query_one("#state", Label).update("[#e3b341]asleep, or off the network[/]")
+            self.query_one("#detail", Label).update(f"{self.host} is not answering")
+
+    @work(thread=True, exclusive=True)
+    def load_library(self):
+        data = {"albums": [], "concerts": []}
+        try:
+            with urllib.request.urlopen(self.shelf + "/api/library", timeout=25) as r:
+                data = json.load(r)
+        except Exception:
+            pass
+        self.call_from_thread(self.paint_library, data)
+
+    def paint_library(self, data):
+        self.library = data
+        if not data.get("albums") and not data.get("concerts"):
+            self.note(f"no answer from the shelf server at {self.shelf}")
+        self.apply_filter()
+
+    def apply_filter(self):
+        needle = self.query_one("#search", Input).value.strip().lower()
+        items = self.library.get(self.kind, [])
+        if needle:
+            items = [i for i in items
+                     if needle in (i.get("artist", "") + " " + i.get("title", "")).lower()]
+        items = sorted(items, key=lambda i: ((i.get("artist") or "").lower(),
+                                             str(i.get("year") or "")))
+        self.shown = items
+        table = self.query_one("#library", DataTable)
+        table.clear()
+        for item in items:
+            count = item.get("tracks") or item.get("losslessTracks") or item.get("chapters") or 0
+            if isinstance(count, list):
+                count = len(count)
+            table.add_row((item.get("artist") or "")[:34], (item.get("title") or "")[:46],
+                          str(item.get("year") or ""), str(count), minutes(item.get("duration")))
+        self.note(f"{len(items)} {self.kind}")
+        if items:
+            table.move_cursor(row=0)
+
+    @on(Input.Changed, "#search")
+    def filter_changed(self):
+        self.apply_filter()
+
+    @on(DataTable.RowSelected, "#library")
+    def row_clicked(self, event: DataTable.RowSelected):
+        self.play(event.cursor_row)
+
+    def current(self):
+        table = self.query_one("#library", DataTable)
+        index = table.cursor_row
+        if 0 <= index < len(self.shown):
+            return self.shown[index]
+        return None
+
+    def play(self, index=None, shuffle=False):
+        item = self.shown[index] if index is not None and 0 <= index < len(self.shown) else self.current()
+        if not item:
+            return
+        verb = "shuffling" if shuffle else "playing"
+        self.send_command("play", {"id": item["id"], "shuffle": shuffle},
+                          f"{verb} {item.get('artist', '')} - {item.get('title', '')}")
+
+    @work(thread=True)
+    def send_command(self, action, args, note):
+        # Shelf only hears commands while it is open, so put it on screen first.
+        if action == "play":
+            try:
+                current = json.loads(luna(self.host,
+                    "luna://com.webos.applicationManager/getForegroundAppInfo")).get("appId", "")
+            except Exception:
+                current = ""
+            if current != "com.local.shelf":
+                luna(self.host, "luna://com.webos.applicationManager/launch",
+                     json.dumps({"id": "com.local.shelf"}))
+                self.call_from_thread(self.note, "opening Shelf on the tv…")
+                time.sleep(5)
+        body = json.dumps({"action": action, "args": args}).encode()
+        request = urllib.request.Request(self.shelf + "/api/command", data=body,
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as r:
+                ok = json.load(r).get("ok")
+        except Exception as exc:
+            self.call_from_thread(self.note, f"shelf server did not take it: {exc}")
+            return
+        self.call_from_thread(self.note, note if ok else "the server refused that command")
+
+    @on(Button.Pressed)
+    def pressed(self, event: Button.Pressed):
+        bid = event.button.id or ""
+        if bid.startswith("app-"):
+            self.tv_send("luna://com.webos.applicationManager/launch",
+                         json.dumps({"id": event.button.tooltip}),
+                         f"opening {event.button.label} on the tv")
+        elif bid in ("k-albums", "k-concerts"):
+            self.kind = bid[2:]
+            for button in (self.query_one("#k-albums"), self.query_one("#k-concerts")):
+                button.set_class(button.id == bid, "on")
+            self.apply_filter()
+        elif bid == "play":
+            self.play()
+        elif bid == "shuffle":
+            self.play(shuffle=True)
+        elif bid in ("pause", "next", "previous", "stop"):
+            self.send_command(bid, {}, bid)
+        elif bid == "vol-up":
+            self.tv_send("luna://com.webos.service.audio/master/volumeUp", "{}", "volume up")
+        elif bid == "vol-down":
+            self.tv_send("luna://com.webos.service.audio/master/volumeDown", "{}", "volume down")
+        elif bid == "mute":
+            self.tv_send("luna://com.webos.service.audio/master/setMuted",
+                         json.dumps({"muted": True}), "muted")
+        elif bid.startswith("vol-"):
+            level = int(bid.split("-")[1])
+            self.tv_send("luna://com.webos.service.audio/master/setVolume",
+                         json.dumps({"volume": level}), f"volume {level}")
+        elif bid == "off":
+            self.tv_send("luna://com.webos.service.tvpower/power/turnOffDisplay", "{}", "screen off")
+        elif bid == "wake":
+            self.wake()
+        elif bid == "refresh":
+            self.refresh_status()
+            self.load_library()
+        elif bid == "yt-go":
+            self.play_youtube(self.query_one("#yt", Input).value.strip())
+        elif bid == "web-go":
+            url = self.query_one("#web", Input).value.strip()
+            if url:
+                self.tv_send("luna://com.webos.applicationManager/launch",
+                             json.dumps({"id": "com.webos.app.beanbrowser", "params": {"target": url}}),
+                             f"opening {url}")
+        elif bid == "say-go":
+            message = self.query_one("#say", Input).value.strip()
+            if message:
+                self.tv_send("luna://com.webos.notification/createToast",
+                             json.dumps({"message": message}), "sent to the screen")
+
+    @work(thread=True)
+    def tv_send(self, uri, payload, note):
+        luna(self.host, uri, payload)
+        self.call_from_thread(self.note, note)
+        self.refresh_status()
+
+    @work(thread=True)
+    def play_youtube(self, query):
+        if not query:
+            return
+        if query.startswith("http"):
+            match = re.search(r"(?:v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11})", query)
+            video = match.group(1) if match else ""
+        else:
+            video = subprocess.run(["yt-dlp", "--flat-playlist", "--print", "id",
+                                    f"ytsearch1:{query}"], capture_output=True, text=True).stdout.strip()
+        if not video:
+            self.call_from_thread(self.note, "could not work out which video that is")
+            return
+        luna(self.host, "luna://com.webos.applicationManager/launch",
+             json.dumps({"id": "youtube.leanback.v4", "params": {"contentTarget": f"v={video}"}}))
+        self.call_from_thread(self.note, f"playing {video} on the tv")
+
+    @work(thread=True)
+    def wake(self):
+        mac = self.cfg.get("mac", "")
+        if not mac:
+            self.call_from_thread(self.note, f'add the tv mac address to {CFG} to wake it')
+            return
+        packet = bytes.fromhex("F" * 12 + mac.replace(":", "").replace("-", "") * 16)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.sendto(packet, ("255.255.255.255", 9))
+        self.call_from_thread(self.note, "magic packet sent")
+
+    def action_refresh(self):
+        self.refresh_status()
+        self.load_library()
+
+
+if __name__ == "__main__":
+    TVPane().run()

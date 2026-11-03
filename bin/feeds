@@ -1,0 +1,274 @@
+#!/Users/ivan/rex/venv/bin/python
+"""Today's agenda, Slack and Discord in one pane you can click."""
+import json
+import os
+import subprocess
+import time
+import urllib.parse
+import urllib.request
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import (Button, DataTable, Footer, Header, Label, Static,
+                             TabbedContent, TabPane)
+
+HOME = os.path.expanduser("~")
+AGENDA_JS = os.path.join(HOME, "rex/bin/agenda-events.js")
+DISCORD_CFG = os.path.expanduser("~/.config/rex-comms/discord.json")
+STATE = os.path.expanduser("~/.local/state/rex-comms")
+
+
+def keychain(service):
+    try:
+        out = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
+                             capture_output=True, text=True, timeout=10)
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def slack_api(token, method, **params):
+    url = "https://slack.com/api/" + method
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    request = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+    with urllib.request.urlopen(request, timeout=20) as r:
+        return json.load(r)
+
+
+def discord_api(token, path):
+    request = urllib.request.Request("https://discord.com/api/v10" + path,
+                                     headers={"Authorization": "Bot " + token})
+    with urllib.request.urlopen(request, timeout=20) as r:
+        return json.load(r)
+
+
+class Feeds(App):
+    CSS = """
+    Screen { background: #11151c; color: #c9d3df; }
+    TabbedContent { height: 1fr; }
+    Tabs { background: #171d26; }
+    Button { background: #1d242e; color: #c9d3df; border: none; margin: 0 1 1 0; min-width: 14; }
+    Button:hover { background: #26303c; color: #5ad1c4; }
+    Horizontal { height: auto; }
+    DataTable { height: 1fr; background: #11151c; }
+    DataTable > .datatable--header { background: #171d26; color: #71808f; text-style: bold; }
+    DataTable > .datatable--cursor { background: #26303c; }
+    .card { padding: 1 2; height: auto; }
+    .dim { color: #71808f; }
+    #agenda-body { height: 1fr; padding: 1 2; }
+    #note { height: auto; padding: 0 2 1 2; color: #71808f; }
+    """
+    BINDINGS = [("q", "quit", "Quit"), ("r", "reload", "Refresh")]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with TabbedContent(initial="agenda"):
+            with TabPane("Agenda", id="agenda"):
+                with Horizontal():
+                    yield Button("Refresh", id="agenda-reload")
+                    yield Button("Grant calendar access", id="agenda-grant")
+                yield VerticalScroll(Static("", id="agenda-body"))
+            with TabPane("Slack", id="slack"):
+                with Horizontal():
+                    yield Button("Refresh", id="slack-reload")
+                    yield Button("Open in browser pane", id="slack-open")
+                    yield Button("Set it up", id="slack-setup")
+                yield DataTable(cursor_type="row", id="slack-table")
+            with TabPane("Discord", id="discord"):
+                with Horizontal():
+                    yield Button("Refresh", id="discord-reload")
+                    yield Button("List channels", id="discord-channels")
+                    yield Button("Set it up", id="discord-setup")
+                yield DataTable(cursor_type="row", id="discord-table")
+        yield Label("", id="note")
+        yield Footer()
+
+    def on_mount(self):
+        self.title = "Feeds"
+        self.query_one("#slack-table", DataTable).add_columns("when", "where", "who", "message")
+        self.query_one("#discord-table", DataTable).add_columns("when", "channel", "who", "message")
+        self.slack_rows = []
+        self.load_agenda()
+        self.load_slack()
+        self.load_discord()
+        self.set_interval(120, self.load_slack)
+        self.set_interval(120, self.load_discord)
+        self.set_interval(600, self.load_agenda)
+
+    def note(self, text):
+        self.query_one("#note", Label).update(text)
+
+    # agenda -------------------------------------------------------------
+
+    @work(thread=True, exclusive=True)
+    def load_agenda(self):
+        out = ""
+        try:
+            out = subprocess.run(["osascript", "-l", "JavaScript", AGENDA_JS],
+                                 capture_output=True, text=True, timeout=40).stdout.strip()
+        except Exception:
+            out = ""
+        self.call_from_thread(self.paint_agenda, out)
+
+    def paint_agenda(self, out):
+        body = self.query_one("#agenda-body", Static)
+        if not out or out == "DENIED":
+            body.update(
+                "[b]macOS is not letting the terminal read your calendar yet.[/b]\n\n"
+                "  Click [b]Grant calendar access[/b], turn on Rex Beta under Calendars,\n"
+                "  then click Refresh.\n\n"
+                "  [dim]Or make a Shortcut called \"Agenda\" and the agenda command picks it up.[/dim]")
+            return
+        today, tomorrow = [], []
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 4:
+                continue
+            day, when, title, calendar = parts[0], parts[1], parts[2], parts[3]
+            row = f"  [#5ad1c4]{when:<8}[/] {title}   [dim]{calendar}[/]"
+            (today if day == "0" else tomorrow).append(row)
+        text = [f"[b]{time.strftime('%A %d %B')}[/b]", ""]
+        text += today or ["  [dim]nothing today[/]"]
+        text += ["", f"[dim]{time.strftime('%a %d %b', time.localtime(time.time() + 86400))}[/dim]"]
+        text += tomorrow or ["  [dim]nothing[/]"]
+        body.update("\n".join(text))
+
+    # slack --------------------------------------------------------------
+
+    @work(thread=True, exclusive=True)
+    def load_slack(self):
+        token = keychain("rex-slack")
+        if not token:
+            self.call_from_thread(self.slack_setup_note)
+            return
+        rows = []
+        try:
+            me = slack_api(token, "auth.test").get("user_id", "")
+            names = {}
+            convos = slack_api(token, "users.conversations", types="im,mpim",
+                               exclude_archived="true", limit=60).get("channels", [])
+            for convo in convos:
+                history = slack_api(token, "conversations.history", channel=convo["id"], limit=4)
+                for message in history.get("messages", []):
+                    if message.get("user") == me:
+                        continue
+                    uid = message.get("user", "")
+                    if uid and uid not in names:
+                        info = slack_api(token, "users.info", user=uid).get("user", {})
+                        names[uid] = (info.get("profile", {}).get("display_name")
+                                      or info.get("real_name") or uid)
+                    rows.append((float(message.get("ts", 0)),
+                                 names.get(convo.get("user", ""), "dm"),
+                                 names.get(uid, uid),
+                                 " ".join(message.get("text", "").split())[:120],
+                                 convo["id"]))
+            found = slack_api(token, "search.messages", query=f"<@{me}>", sort="timestamp", count=10)
+            for match in found.get("messages", {}).get("matches", []):
+                rows.append((float(match.get("ts", 0)),
+                             "#" + match.get("channel", {}).get("name", "?"),
+                             match.get("username", "?"),
+                             " ".join(match.get("text", "").split())[:120],
+                             match.get("channel", {}).get("id", "")))
+        except Exception as exc:
+            self.call_from_thread(self.note, f"slack said: {exc}")
+            return
+        rows.sort(reverse=True)
+        self.call_from_thread(self.paint_slack, rows[:40])
+
+    def slack_setup_note(self):
+        self.query_one("#slack-table", DataTable).clear()
+        self.note("Slack needs a token — click Set it up")
+
+    def paint_slack(self, rows):
+        self.slack_rows = rows
+        table = self.query_one("#slack-table", DataTable)
+        table.clear()
+        for ts, where, who, text, _ in rows:
+            table.add_row(time.strftime("%H:%M", time.localtime(ts)), where[:18], who[:16], text)
+        self.note(f"slack: {len(rows)} recent")
+
+    # discord ------------------------------------------------------------
+
+    @work(thread=True, exclusive=True)
+    def load_discord(self):
+        token = keychain("rex-discord")
+        if not token:
+            self.call_from_thread(self.note, "Discord needs a bot token — click Set it up")
+            return
+        try:
+            cfg = json.load(open(DISCORD_CFG))
+        except Exception:
+            cfg = {"channels": []}
+        rows = []
+        for channel_id in cfg.get("channels", []):
+            try:
+                name = "#" + discord_api(token, f"/channels/{channel_id}")["name"]
+                for message in discord_api(token, f"/channels/{channel_id}/messages?limit=10"):
+                    rows.append((message["timestamp"], name,
+                                 message["author"]["username"],
+                                 " ".join(message.get("content", "").split())[:120]))
+            except Exception:
+                continue
+        rows.sort(reverse=True)
+        self.call_from_thread(self.paint_discord, rows[:40])
+
+    def paint_discord(self, rows):
+        table = self.query_one("#discord-table", DataTable)
+        table.clear()
+        for ts, where, who, text in rows:
+            table.add_row(ts[11:16], where[:18], who[:16], text)
+        self.note(f"discord: {len(rows)} recent")
+
+    # buttons ------------------------------------------------------------
+
+    @on(Button.Pressed)
+    def clicked(self, event: Button.Pressed):
+        bid = event.button.id or ""
+        if bid == "agenda-reload":
+            self.load_agenda()
+        elif bid == "agenda-grant":
+            subprocess.run(["open",
+                            "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"],
+                           capture_output=True)
+            self.note("turn on Rex Beta under Calendars, then click Refresh")
+        elif bid == "slack-reload":
+            self.load_slack()
+        elif bid == "discord-reload":
+            self.load_discord()
+        elif bid == "slack-setup":
+            self.in_pane("Slack setup", ["sh", "-c",
+                         "cat ~/.config/rex-comms/slack-manifest.yaml; echo; "
+                         "echo 'Create the app at https://api.slack.com/apps?new_app=1 from this manifest,'; "
+                         "echo 'then store the user token:'; "
+                         "echo '  security add-generic-password -s rex-slack -a slack -w'; "
+                         "echo; read -p 'press enter to close' _"])
+        elif bid == "discord-setup":
+            self.in_pane("Discord setup", ["sh", "-c",
+                         "echo 'Make a bot at https://discord.com/developers/applications,'; "
+                         "echo 'invite it to a server you run, then:'; "
+                         "echo '  security add-generic-password -s rex-discord -a bot -w'; "
+                         "echo '  discord-feed --channels'; "
+                         "echo; read -p 'press enter to close' _"])
+        elif bid == "discord-channels":
+            self.in_pane("Discord channels", [os.path.join(HOME, "rex/bin/discord-feed"), "--channels"])
+        elif bid == "slack-open":
+            self.in_pane("Slack", [os.path.join(HOME, "rex/bin/web"), "https://app.slack.com/client"])
+
+    def in_pane(self, label, argv):
+        session = os.environ.get("REX_SESSION")
+        if not session:
+            subprocess.Popen(argv)
+            return
+        subprocess.run(["rex", "run", "-s", session, "--label", label, "--keep-open", "--", *argv],
+                       capture_output=True)
+
+    def action_reload(self):
+        self.load_agenda()
+        self.load_slack()
+        self.load_discord()
+
+
+if __name__ == "__main__":
+    Feeds().run()

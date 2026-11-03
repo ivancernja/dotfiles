@@ -1,0 +1,102 @@
+#!/bin/sh
+# Drive the living-room TV from a pane (rooted webOS, reached over ssh).
+#   tv status            is it awake, and what is on screen
+#   tv apps              installed apps, id and name
+#   tv launch <id>       open an app
+#   tv yt <url|words>    play on YouTube
+#   tv web <url>         open a page on the TV
+#   tv music             open the music app set in ~/.config/rex-comms/tv.json
+#   tv vol <0-100|+|->   volume
+#   tv say <message>     toast on screen
+#   tv off               screen off
+#   tv wake              wake-on-lan, needs "mac" in the config file
+CFG="$HOME/.config/rex-comms/tv.json"
+HOST=$(jq -r '.host // "tv"' "$CFG" 2>/dev/null || echo tv)
+MUSIC=$(jq -r '.music_app // ""' "$CFG" 2>/dev/null)
+MAC=$(jq -r '.mac // ""' "$CFG" 2>/dev/null)
+SSH="ssh -o ConnectTimeout=6 -o BatchMode=yes $HOST"
+
+luna() { # luna <uri> <payload> [-f]
+  uri="$1"; payload="$2"; flag="$3"
+  $SSH "luna-send -n 1 $flag '$uri' '$payload'" 2>&1
+}
+
+case "$1" in
+  status)
+    if ! $SSH 'echo awake' >/dev/null 2>&1; then
+      echo "tv is not reachable (asleep, or off the network)"
+      [ -n "$MAC" ] && echo "try: tv wake"
+      exit 1
+    fi
+    echo "tv is awake"
+    luna "luna://com.webos.applicationManager/getForegroundAppInfo" '{}' -f |
+      jq -r '"foreground: " + (.appId // "unknown")' 2>/dev/null
+    ;;
+  apps)
+    luna "luna://com.webos.applicationManager/listApps" '{}' -f |
+      jq -r '.apps[]? | "\(.id)\t\(.title)"' 2>/dev/null | sort | column -t -s "$(printf '\t')"
+    ;;
+  launch)
+    [ -n "$2" ] || { echo "usage: tv launch <app-id>"; exit 2; }
+    luna "luna://com.webos.applicationManager/launch" "{\"id\":\"$2\"}"
+    ;;
+  yt)
+    shift
+    [ -n "$1" ] || { echo "usage: tv yt <url|search words>"; exit 2; }
+    case "$1" in
+      http*) vid=$(printf '%s' "$1" | sed -nE 's#.*(v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{11}).*#\2#p') ;;
+      *)     vid=$(yt-dlp --flat-playlist --print id "ytsearch1:$*" 2>/dev/null | head -1) ;;
+    esac
+    [ -n "$vid" ] || { echo "could not work out which video"; exit 1; }
+    luna "luna://com.webos.applicationManager/launch" \
+      "{\"id\":\"youtube.leanback.v4\",\"params\":{\"contentTarget\":\"v=$vid\"}}"
+    echo "playing $vid on the tv"
+    ;;
+  web)
+    [ -n "$2" ] || { echo "usage: tv web <url>"; exit 2; }
+    luna "luna://com.webos.applicationManager/launch" \
+      "{\"id\":\"com.webos.app.browser\",\"params\":{\"target\":\"$2\"}}"
+    ;;
+  music)
+    [ -n "$MUSIC" ] || { echo "set \"music_app\" in $CFG — find its id with: tv apps"; exit 2; }
+    luna "luna://com.webos.applicationManager/launch" "{\"id\":\"$MUSIC\"}"
+    ;;
+  play)
+    shift
+    case "$1" in
+      *youtu*) exec "$0" yt "$1" ;;
+      http*)   exec "$0" web "$1" ;;
+      *) echo "local files need a server first; send a url instead"; exit 2 ;;
+    esac
+    ;;
+  vol)
+    case "$2" in
+      +) luna "luna://com.webos.service.audio/master/volumeUp" '{}' ;;
+      -) luna "luna://com.webos.service.audio/master/volumeDown" '{}' ;;
+      "") echo "usage: tv vol <0-100|+|->"; exit 2 ;;
+      *) luna "luna://com.webos.service.audio/master/setVolume" "{\"volume\":$2}" ;;
+    esac
+    ;;
+  say)
+    shift
+    luna "luna://com.webos.notification/createToast" "{\"message\":\"$*\"}"
+    ;;
+  off)
+    luna "luna://com.webos.service.tvpower/power/turnOffDisplay" '{}'
+    ;;
+  wake)
+    [ -n "$MAC" ] || { echo "put the tv's \"mac\" in $CFG first"; exit 2; }
+    python3 - "$MAC" <<'PY'
+import socket, sys
+mac = sys.argv[1].replace(":", "").replace("-", "")
+pkt = bytes.fromhex("F" * 12 + mac * 16)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+s.sendto(pkt, ("255.255.255.255", 9))
+print("magic packet sent")
+PY
+    ;;
+  *)
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+esac

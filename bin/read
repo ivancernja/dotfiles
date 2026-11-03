@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Read an article without the page around it.
+
+  read <url>          print the article as markdown, through glow when it is installed
+  read --raw <url>    plain text, no pager
+"""
+import html, re, subprocess, sys, urllib.request
+from html.parser import HTMLParser
+
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+DROP = {"script", "style", "noscript", "svg", "iframe", "form", "nav", "aside", "footer", "header", "figure", "button", "select"}
+BLOCK = {"div", "article", "section", "main", "td"}
+TEXT_TAGS = {"p", "h1", "h2", "h3", "li", "blockquote"}
+
+
+class Reader(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.stack = []          # open containers, as indices into self.boxes
+        self.boxes = []          # [{"score": int, "parts": [(tag, text)]}]
+        self.cur = None          # (tag, [chunks]) while inside a text tag
+        self.skip = 0
+        self.title = ""
+        self.in_title = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in DROP:
+            self.skip += 1
+            return
+        if self.skip:
+            return
+        if tag == "title":
+            self.in_title = True
+        elif tag in BLOCK:
+            self.boxes.append({"score": 0, "parts": []})
+            self.stack.append(len(self.boxes) - 1)
+        elif tag in TEXT_TAGS and self.cur is None:
+            self.cur = (tag, [])
+
+    def handle_endtag(self, tag):
+        if tag in DROP:
+            self.skip = max(0, self.skip - 1)
+            return
+        if self.skip:
+            return
+        if tag == "title":
+            self.in_title = False
+        elif tag in BLOCK and self.stack:
+            self.stack.pop()
+        elif self.cur and tag == self.cur[0]:
+            text = " ".join("".join(self.cur[1]).split())
+            self.cur = None
+            if len(text) < 2:
+                return
+            if self.stack:
+                box = self.boxes[self.stack[-1]]
+                box["parts"].append((tag, text))
+                if tag in ("p", "blockquote"):
+                    box["score"] += len(text)
+
+    def handle_data(self, data):
+        if self.skip:
+            return
+        if self.in_title:
+            self.title += data
+        elif self.cur:
+            self.cur[1].append(data)
+
+
+def fetch(url):
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "hr,en;q=0.8"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        raw = r.read()
+        enc = r.headers.get_content_charset() or "utf-8"
+    text = raw.decode(enc, "replace")
+    m = re.search(r'<meta[^>]+charset=["\']?([\w-]+)', text[:2000], re.I)
+    if m and m.group(1).lower() not in (enc.lower(), "utf-8"):
+        text = raw.decode(m.group(1), "replace")
+    return text
+
+
+def extract(url):
+    p = Reader()
+    p.feed(fetch(url))
+    if not p.boxes:
+        return p.title.strip(), []
+    best = max(p.boxes, key=lambda b: b["score"])
+    if best["score"] < 200:                       # fall back to everything, sorted by position
+        parts = [pt for b in p.boxes for pt in b["parts"]]
+    else:
+        parts = best["parts"]
+    seen, out = set(), []
+    for tag, text in parts:
+        if text in seen:
+            continue
+        seen.add(text)
+        out.append((tag, text))
+    return p.title.strip(), out
+
+
+def to_markdown(title, parts):
+    lines = ["# " + html.unescape(title), ""]
+    for tag, text in parts:
+        text = html.unescape(text)
+        if tag in ("h1", "h2", "h3"):
+            lines += ["## " + text, ""]
+        elif tag == "li":
+            lines.append("- " + text)
+        elif tag == "blockquote":
+            lines += ["> " + text, ""]
+        else:
+            lines += [text, ""]
+    return "\n".join(lines)
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    raw = "--raw" in sys.argv
+    if not args:
+        print(__doc__)
+        return 2
+    title, parts = extract(args[0])
+    md = to_markdown(title, parts)
+    if raw:
+        print(md)
+        return 0
+    try:
+        subprocess.run(["glow", "-p", "-w", "92", "-"], input=md, text=True)
+    except FileNotFoundError:
+        print(md)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

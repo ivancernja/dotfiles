@@ -1,0 +1,18 @@
+#!/bin/sh
+# Video and audio in a pane. Works with files, URLs, YouTube, playlists.
+#   play <file|url>        watch in the terminal
+#   play --audio <url>     listen, no picture
+#   play --tv <url>        send it to the TV instead
+# Rendering uses mpv's true-colour output, which any 24-bit terminal can draw.
+case "$1" in
+  --tv)    shift; exec "$HOME/rex/bin/tv" play "$@" ;;
+  --audio) shift; exec mpv --no-video --term-osd-bar --ytdl-format='bestaudio' "$@" ;;
+esac
+
+exec mpv \
+  --vo=tct \
+  --profile=sw-fast \
+  --really-quiet \
+  --term-osd-bar \
+  --ytdl-format='bestvideo[height<=720]+bestaudio/best[height<=720]' \
+  "$@"

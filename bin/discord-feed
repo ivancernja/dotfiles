@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Discord channels in a pane, via a bot in servers you control.
+Token from Keychain (service: rex-discord). Channels from ~/.config/rex-comms/discord.json.
+A bot sees only servers it has been invited to, and never your DMs — Discord has no
+supported way to read a personal account, and user tokens get accounts banned."""
+import json, os, subprocess, sys, time, urllib.request
+
+CFG = os.path.expanduser("~/.config/rex-comms/discord.json")
+STATE = os.path.expanduser("~/.local/state/rex-comms/discord.json")
+API = "https://discord.com/api/v10"
+DIM, B, CYAN, R = "\033[2m", "\033[1m", "\033[36m", "\033[0m"
+
+SETUP = f"""{B}Discord is not connected yet.{R}
+
+1. Create an app and bot at {CYAN}https://discord.com/developers/applications{R}
+2. Invite it to a server you administer, with "Read Messages" and "Read Message History"
+3. Store the bot token:  {CYAN}security add-generic-password -s rex-discord -a bot -w{R}
+4. List the channels to follow:  {CYAN}discord-feed --channels{R} then put the ids in
+   {CYAN}~/.config/rex-comms/discord.json{R}  as  {{"channels": ["123...", "456..."]}}
+"""
+
+def token():
+    try:
+        out = subprocess.run(["security", "find-generic-password", "-s", "rex-discord", "-w"],
+                             capture_output=True, text=True, timeout=10)
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+def get(tok, path):
+    req = urllib.request.Request(API + path, headers={"Authorization": "Bot " + tok})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.load(r)
+
+def load(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+def list_channels(tok):
+    for g in get(tok, "/users/@me/guilds"):
+        print(f"\n{B}{g['name']}{R}")
+        try:
+            for c in get(tok, f"/guilds/{g['id']}/channels"):
+                if c.get("type") == 0:
+                    print(f"  {DIM}{c['id']}{R}  #{c['name']}")
+        except Exception as e:
+            print(f"  {DIM}(no access: {e}){R}")
+
+def main():
+    tok = token()
+    if not tok:
+        print(SETUP)
+        return 1
+    if "--channels" in sys.argv:
+        list_channels(tok)
+        return 0
+
+    cfg = load(CFG, {"channels": []})
+    chans = cfg.get("channels", [])
+    if not chans:
+        print(f"{DIM}no channels configured yet — run: discord-feed --channels{R}")
+        return 1
+    state = load(STATE, {})
+    names = {}
+    for cid in chans:
+        try:
+            names[cid] = "#" + get(tok, f"/channels/{cid}")["name"]
+        except Exception:
+            names[cid] = cid
+
+    watch = "--watch" in sys.argv
+    print(f"{DIM}discord: {', '.join(names.values())}{R}\n")
+    first = True
+    while True:
+        rows = []
+        for cid in chans:
+            path = f"/channels/{cid}/messages?limit={'5' if first else '20'}"
+            if state.get(cid):
+                path += "&after=" + state[cid]
+            try:
+                msgs = get(tok, path)
+            except Exception:
+                continue
+            if msgs:
+                state[cid] = msgs[0]["id"]
+            for m in reversed(msgs):
+                rows.append((m["timestamp"], names[cid], m["author"]["username"],
+                             " ".join(m.get("content", "").split())[:160]))
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+        with open(STATE, "w") as f:
+            json.dump(state, f)
+        for ts, where, who, text in sorted(rows):
+            print(f"{DIM}{ts[11:16]}{R} {CYAN}{where[:14]:<14}{R} {B}{who[:12]:<12}{R} {text}")
+        if not watch:
+            return 0
+        first = False
+        time.sleep(20)
+
+if __name__ == "__main__":
+    sys.exit(main())
