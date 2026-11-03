@@ -15,7 +15,7 @@ import urllib.parse
 
 OUT = os.path.expanduser("~/.config/rex-comms/sessions.json")
 HOME = os.path.expanduser("~")
-BUILDERS = {"Comms": "~/rex/bin/comms"}
+BUILDERS = {"Home": "~/rex/bin/comms"}
 SKIP_PROGRAMS = {"claude", "codex"}
 
 

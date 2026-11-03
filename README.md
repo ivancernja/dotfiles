@@ -3,18 +3,14 @@
 Everything that turns this terminal into the place the work happens. Rebuild it on a new
 machine with `./install.sh`, then `rex do comms`.
 
-## The Comms session
+## The Home session
 
-One Rex session, six tabs, built by `bin/comms`:
+One Rex session, two tabs, built by `bin/comms`:
 
 | Tab | What it is |
 | --- | --- |
-| Mail | Gmail over IMAP, clickable: folders, message list, reader, reply and send |
-| Feeds | Today's agenda, Slack DMs and mentions, Discord channels |
-| PRs | Every open pull request in the encoredev org, with Vercel preview links |
+| Calendar | Today, tomorrow or the week, with the event you click spelled out below |
 | TV | The living room: pick an album, open an app, work the volume |
-| Web | Carbonyl behind an ad-filtering proxy, popups blocked, pages forced dark |
-| Bots | Whatever is in `~/.config/rex-comms/bots.tsv` |
 
 ## After a reboot
 
@@ -38,13 +34,14 @@ Other sessions come back as their tabs and panes, each in the right directory.
 | `comms` | build or focus the session |
 | `snapshot` / `boot` | save the open sessions, put them back after a reboot |
 | `keep on` | do that automatically: save every 30 minutes, restore at login |
-| `web <url>` | browse in a pane, no ads, no popups (`--text` drops images too) |
+| `web <url>` | browse in a pane, no ads, no popups (`--text` drops images too); also what `$BROWSER` points at |
 | `read <url>` | an article as plain text, without the page around it |
 | `news [url]` | headlines to pick from, then read |
 | `play <file\|url>` | video and audio in the terminal (`--audio`, `--tv`) |
 | `preview <file>` | one image, PDF page or frame |
 | `tv <command>` | the TV from the command line: status, apps, yt, music, vol, say, off |
-| `prs`, `mail`, `feeds`, `tv-pane` | the clickable panes, runnable on their own |
+| `agenda-pane`, `tv-pane` | the clickable panes, runnable on their own |
+| `agenda` | the same calendar as plain text (`--watch` to keep it on screen) |
 | `adproxy` | the filtering proxy, started automatically by `web` |
 
 ## Where things live
@@ -53,7 +50,6 @@ Other sessions come back as their tabs and panes, each in the right directory.
 - `env.sh` — PATH and BROWSER, sourced from `~/.zshrc`
 - `~/.config/rex-comms/` — repos, bots, TV apps, mail account, Discord channels
 - `~/.config/rex/init.lua` — the `comms` action and the ⌥Space summon key
-- Keychain — `rex-gmail`, `rex-slack`, `rex-discord`
 
 ## Calendar access
 

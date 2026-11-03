@@ -1,8 +1,10 @@
 #!/Users/ivan/rex/venv/bin/python
 """Today's and tomorrow's events, straight from EventKit.
 
-Prints one event per line: day<TAB>time<TAB>title<TAB>calendar, where day is 0 for today
-and 1 for tomorrow. Prints DENIED if macOS has not granted calendar access.
+Prints one event per line, tab separated:
+    day  start  end  title  calendar  location
+day is 0 for today, 1 for tomorrow, negative for something that began earlier and is still
+running. Prints DENIED if macOS has not granted calendar access.
 """
 import datetime
 import sys
@@ -35,17 +37,25 @@ def main():
         print("DENIED")
         return 1
 
+    days = 2
+    if len(sys.argv) > 1 and sys.argv[1].isdigit():
+        days = int(sys.argv[1])
     midnight = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     start = Foundation.NSDate.dateWithTimeIntervalSince1970_(midnight.timestamp())
-    end = Foundation.NSDate.dateWithTimeIntervalSince1970_(midnight.timestamp() + 2 * 86400)
+    end = Foundation.NSDate.dateWithTimeIntervalSince1970_(midnight.timestamp() + days * 86400)
     predicate = store.predicateForEventsWithStartDate_endDate_calendars_(start, end, None)
     for event in store.eventsMatchingPredicate_(predicate) or []:
         when = datetime.datetime.fromtimestamp(event.startDate().timeIntervalSince1970())
         day = (when.date() - midnight.date()).days
         label = "all day" if event.isAllDay() else when.strftime("%H:%M")
+        finish = ""
+        if event.endDate() and not event.isAllDay():
+            finish = datetime.datetime.fromtimestamp(
+                event.endDate().timeIntervalSince1970()).strftime("%H:%M")
         title = event.title() or "(untitled)"
         calendar = event.calendar().title() if event.calendar() else ""
-        print(f"{day}\t{label}\t{title}\t{calendar}")
+        location = (event.location() or "").replace("\n", " ").strip()
+        print(f"{day}\t{label}\t{finish}\t{title}\t{calendar}\t{location}")
     return 0
 
 

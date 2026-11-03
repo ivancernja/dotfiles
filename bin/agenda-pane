@@ -1,0 +1,146 @@
+#!/Users/ivan/rex/venv/bin/python
+"""The calendar as a pane you click: today, tomorrow, and the rest of the week."""
+import os
+import subprocess
+import time
+from datetime import datetime, timedelta
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Button, DataTable, Footer, Header, Label, Static
+
+READER = os.path.expanduser("~/rex/bin/agenda-events")
+SPANS = [("Today", 1), ("2 days", 2), ("This week", 7)]
+
+
+class Agenda(App):
+    CSS = """
+    Screen { background: #11151c; color: #c9d3df; }
+    #bar { height: auto; padding: 1 2 0 2; }
+    Button { background: #1d242e; color: #c9d3df; border: none; margin: 0 1 1 0; min-width: 12; }
+    Button:hover { background: #26303c; color: #5ad1c4; }
+    Button.on { background: #5ad1c4; color: #11151c; }
+    #today { height: auto; padding: 0 2; text-style: bold; }
+    DataTable { height: 1fr; margin: 0 2; background: #11151c; }
+    DataTable > .datatable--header { background: #171d26; color: #71808f; text-style: bold; }
+    DataTable > .datatable--cursor { background: #26303c; }
+    #detail { height: 5; padding: 1 2; background: #151b23; border-top: solid #262e3a; }
+    .dim { color: #71808f; }
+    #note { height: auto; padding: 0 2 1 2; color: #71808f; }
+    """
+    BINDINGS = [("q", "quit", "Quit"), ("r", "reload", "Refresh")]
+
+    def __init__(self):
+        super().__init__()
+        self.days = 2
+        self.rows = []
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Horizontal(id="bar"):
+            for label, days in SPANS:
+                yield Button(label, id=f"span-{days}",
+                             classes="on" if days == 2 else "")
+            yield Button("Refresh", id="reload")
+            yield Button("Open Calendar", id="open-app")
+        yield Label("", id="today")
+        yield DataTable(cursor_type="row", id="events")
+        with Vertical(id="detail"):
+            yield Label("", id="what")
+            yield Static("", id="where", classes="dim")
+        yield Label("", id="note")
+        yield Footer()
+
+    def on_mount(self):
+        self.title = "Calendar"
+        self.query_one("#events", DataTable).add_columns("day", "time", "event", "calendar")
+        self.load()
+        self.set_interval(300, self.load)
+
+    def note(self, text):
+        self.query_one("#note", Label).update(text)
+
+    @work(thread=True, exclusive=True)
+    def load(self):
+        try:
+            out = subprocess.run([READER, str(self.days)], capture_output=True,
+                                 text=True, timeout=40).stdout.strip()
+        except Exception as exc:
+            out = f"ERROR {exc}"
+        self.call_from_thread(self.paint, out)
+
+    def paint(self, out):
+        table = self.query_one("#events", DataTable)
+        table.clear()
+        self.query_one("#today", Label).update(datetime.now().strftime("%A %d %B"))
+        if not out or out.startswith("DENIED") or out.startswith("ERROR"):
+            self.rows = []
+            self.note("macOS has not granted calendar access to Rex Server "
+                      "(Privacy & Security → Calendars)")
+            return
+        rows = []
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 5:
+                continue
+            day, start, end, title, calendar = parts[:5]
+            location = parts[5] if len(parts) > 5 else ""
+            rows.append({"day": int(day), "start": start, "end": end, "title": title,
+                         "calendar": calendar, "location": location})
+        rows.sort(key=lambda r: (r["day"], r["start"] == "all day", r["start"]))
+        self.rows = rows
+        now = datetime.now()
+        for row in rows:
+            when = (now + timedelta(days=max(row["day"], 0)))
+            day_label = "today" if row["day"] <= 0 else (
+                "tomorrow" if row["day"] == 1 else when.strftime("%a %d"))
+            clock = row["start"] if row["start"] == "all day" else (
+                f"{row['start']}–{row['end']}" if row["end"] else row["start"])
+            title = row["title"]
+            if row["day"] <= 0 and row["start"] != "all day" and row["end"]:
+                try:
+                    if datetime.strptime(row["end"], "%H:%M").time() < now.time():
+                        title = f"[dim]{title}[/dim]"
+                except ValueError:
+                    pass
+            table.add_row(day_label, clock, title, row["calendar"][:24])
+        upcoming = sum(1 for r in rows if r["day"] == 0)
+        self.note(f"{upcoming} today, {len(rows)} in view")
+        if rows:
+            table.move_cursor(row=0)
+
+    @on(DataTable.RowHighlighted, "#events")
+    def highlighted(self, event: DataTable.RowHighlighted):
+        if not (0 <= event.cursor_row < len(self.rows)):
+            return
+        row = self.rows[event.cursor_row]
+        self.query_one("#what", Label).update(row["title"])
+        bits = [row["calendar"]]
+        if row["location"]:
+            bits.append(row["location"])
+        if row["start"] != "all day" and row["end"]:
+            bits.append(f"{row['start']} to {row['end']}")
+        self.query_one("#where", Static).update("      ".join(b for b in bits if b))
+
+    @on(Button.Pressed)
+    def clicked(self, event: Button.Pressed):
+        bid = event.button.id or ""
+        if bid.startswith("span-"):
+            self.days = int(bid.split("-")[1])
+            for label, days in SPANS:
+                button = self.query_one(f"#span-{days}", Button)
+                button.set_class(days == self.days, "on")
+            self.load()
+        elif bid == "reload":
+            self.load()
+        elif bid == "open-app":
+            subprocess.run(["open", "-a", "Calendar"], capture_output=True)
+            self.note("opened Calendar")
+
+    def action_reload(self):
+        self.load()
+
+
+if __name__ == "__main__":
+    Agenda().run()

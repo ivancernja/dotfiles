@@ -13,7 +13,7 @@ ok()   { printf '  %s✓%s %s\n' "$G" "$R" "$1"; }
 todo() { printf '  %s•%s %s\n' "$Y" "$R" "$1"; }
 
 step "Command line tools"
-BREW_PKGS="aerc w3m ical-buddy mpv yt-dlp fzf jq gh git-delta glow lazygit btop yazi ripgrep"
+BREW_PKGS="mpv yt-dlp fzf jq gh glow btop yazi ripgrep"
 if have brew; then
   missing=""
   for pkg in $BREW_PKGS; do
@@ -40,15 +40,12 @@ fi
 step "Python side (the clickable panes)"
 PY=$(command -v python3.14 || command -v python3.13 || command -v python3)
 if [ ! -x "$REX_DIR/venv/bin/python" ]; then
-  "$PY" -m venv "$REX_DIR/venv" && "$REX_DIR/venv/bin/pip" -q install textual
+  "$PY" -m venv "$REX_DIR/venv" && "$REX_DIR/venv/bin/pip" -q install textual pyobjc-framework-EventKit
 fi
-"$REX_DIR/venv/bin/python" -c "import textual" 2>/dev/null && ok "textual" || todo "textual did not install"
+"$REX_DIR/venv/bin/python" -c "import textual, EventKit" 2>/dev/null && ok "textual and the EventKit bridge" || todo "the venv did not install cleanly"
 
 step "Config"
 mkdir -p "$CONF" "$HOME/.local/state/rex-comms"
-[ -f "$CONF/repos.txt" ] || printf 'encoredev/www\nencoredev/examples\n' > "$CONF/repos.txt"
-[ -f "$CONF/bots.tsv" ] || printf 'claude\tclaude\ncodex\tcodex\n' > "$CONF/bots.tsv"
-[ -f "$CONF/discord.json" ] || printf '{\n  "channels": []\n}\n' > "$CONF/discord.json"
 [ -f "$CONF/tv.json" ] || cat > "$CONF/tv.json" <<'JSON'
 {
   "host": "tv",
@@ -63,7 +60,6 @@ mkdir -p "$CONF" "$HOME/.local/state/rex-comms"
   ]
 }
 JSON
-[ -f "$CONF/mail.json" ] || printf '{\n  "address": "ivan@encore.dev",\n  "imap": "imap.gmail.com",\n  "smtp": "smtp.gmail.com",\n  "name": "Ivan"\n}\n' > "$CONF/mail.json"
 ok "config in $CONF"
 
 step "Rex"
@@ -74,8 +70,8 @@ if ! grep -q 'name  = "comms"' "$HOME/.config/rex/init.lua" 2>/dev/null; then
 -- Comms: mail, feeds, pull requests, the TV, web and bots.
 rex.action{
   name  = "comms",
-  title = "Open Comms Session",
-  description = "Mail, feeds, pull requests, the TV, web and bots in one session",
+  title = "Open Home Session",
+  description = "Calendar and the living room in one session",
   run   = function()
     local out, err = rex.exec{ os.getenv("HOME") .. "/rex/bin/comms" }
     if err ~= nil then error(err, 0) end
@@ -87,7 +83,7 @@ rex.action{
 rex.bind("alt+space", "client.visibility.toggle")
 LUA
 fi
-rex config reload >/dev/null 2>&1 && ok "rex action 'comms' ready (palette: Open Comms Session)"
+rex config reload >/dev/null 2>&1 && ok "rex action 'comms' ready (palette: Open Home Session)"
 
 step "Shell"
 if grep -q 'rex/env.sh' "$HOME/.zshrc" 2>/dev/null; then
@@ -96,16 +92,9 @@ else
   todo "add this line to ~/.zshrc:   source ~/rex/env.sh"
 fi
 
-step "Credentials still needed"
-for entry in "rex-gmail:Gmail app password" "rex-slack:Slack user token" "rex-discord:Discord bot token"; do
-  service="${entry%%:*}"; what="${entry#*:}"
-  if security find-generic-password -s "$service" >/dev/null 2>&1; then
-    ok "$what"
-  else
-    todo "$what — security add-generic-password -s $service -a me -w"
-  fi
-done
-printf '  %s•%s Calendar: System Settings → Privacy & Security → Calendars → Rex Beta\n' "$Y" "$R"
+step "Calendar"
+printf '  %s•%s macOS grants this to %sRex Server%s, not Rex Beta:\n' "$Y" "$R" "$B" "$R"
+printf '    System Settings → Privacy & Security → Calendars → Rex Server\n'
 
 step "Surviving reboots"
 if launchctl list 2>/dev/null | grep -q dev.rex.boot; then

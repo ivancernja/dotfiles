@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
-# Build the Comms session, or focus it if it is already running.
+# Build the Home session, or focus it if it is already running.
 set -e
 BIN="$HOME/rex/bin"
 icon() { printf "$1"; }
 
-sid=$(rex ls --json | jq -r '.sessions[]? | select(.label=="Comms") | .session_id' | head -1)
+sid=$(rex ls --json | jq -r '.sessions[]? | select(.label=="Home") | .session_id' | head -1)
 if [ -n "$sid" ]; then
   rex do session.select session_id="$sid" 2>/dev/null || true
   echo "$sid"
   exit 0
 fi
 
-created=$(rex new Comms --window "$(icon '\U000F01EE')  Mail" --json -- "$BIN/mail")
+created=$(rex new Home --window "$(icon '\U000F00ED')  Calendar" --json -- "$BIN/agenda-pane")
 sid=$(printf '%s' "$created" | jq -er '.session_id')
-
-rex window new -s "$sid" "$(icon '\U000F046C')  Feeds" --focus=false --keep-open -- "$BIN/feeds"    >/dev/null
-rex window new -s "$sid" "$(icon '\U000F0622')  PRs"   --focus=false --keep-open -- "$BIN/prs"      >/dev/null
-rex window new -s "$sid" "$(icon '\U000F0839')  TV"    --focus=false --keep-open -- "$BIN/tv-pane"  >/dev/null
-rex window new -s "$sid" "$(icon '\U000F059F')  Web"   --focus=false --keep-open -- "$BIN/web" https://index.hr >/dev/null
-rex window new -s "$sid" "$(icon '\U000F06A9')  Bots"  --focus=false --keep-open -- "$BIN/bots"     >/dev/null
-
+rex window new -s "$sid" "$(icon '\U000F0839')  TV" --focus=false --keep-open -- "$BIN/tv-pane" >/dev/null
 rex do session.select session_id="$sid" 2>/dev/null || true
 echo "$sid"
