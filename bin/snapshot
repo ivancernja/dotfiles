@@ -1,0 +1,127 @@
+#!/Users/ivan/rex/venv/bin/python
+"""Write down what is open in Rex, so a reboot does not cost you the setup.
+
+  snapshot            save every session to ~/.config/rex-comms/sessions.json
+  snapshot --show     print what is saved
+
+Sessions with a known recipe (Comms) are saved as that recipe. Everything else is saved as
+its tabs, panes, and the directory each pane was sitting in, which is what `boot` restores.
+"""
+import json
+import os
+import subprocess
+import sys
+import urllib.parse
+
+OUT = os.path.expanduser("~/.config/rex-comms/sessions.json")
+HOME = os.path.expanduser("~")
+BUILDERS = {"Comms": "~/rex/bin/comms"}
+SKIP_PROGRAMS = {"claude", "codex"}
+
+
+def rex(*args):
+    p = subprocess.run(["rex", *args], capture_output=True, text=True)
+    return p.stdout
+
+
+def jrex(*args):
+    try:
+        return json.loads(rex(*args))
+    except Exception:
+        return {}
+
+
+def descend_cwd(pid):
+    """login runs as root, so its directory is unreadable: ask the shell underneath it."""
+    if not pid:
+        return ""
+    rows = subprocess.run(["/bin/ps", "-axo", "pid,ppid"], capture_output=True, text=True).stdout
+    children = {}
+    for line in rows.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) == 2 and parts[1].isdigit():
+            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    seen, frontier = set(), [int(pid)]
+    while frontier:
+        current = frontier.pop(0)
+        for kid in children.get(current, []):
+            if kid in seen:
+                continue
+            seen.add(kid)
+            out = subprocess.run(["/usr/sbin/lsof", "-a", "-p", str(kid), "-d", "cwd", "-Fn"],
+                                 capture_output=True, text=True).stdout
+            for line in out.splitlines():
+                if line.startswith("n/"):
+                    return line[1:]
+            frontier.append(kid)
+    return ""
+
+
+def pane_info(session_id, block_id):
+    # The shell reports its directory to the terminal; fall back to the process table.
+    reported = jrex("block", "call", "-s", session_id, "-b", block_id, "pwd").get("pwd", "")
+    cwd = ""
+    if reported.startswith("file://"):
+        cwd = urllib.parse.unquote(urllib.parse.urlparse(reported).path)
+    info = jrex("block", "call", "-s", session_id, "-b", block_id, "process")
+    child = info.get("child") or {}
+    cwd = cwd or child.get("cwd") or descend_cwd(child.get("pid")) or HOME
+    program = os.path.basename(child.get("invoked_path") or child.get("name") or "")
+    return {"cwd": cwd.replace(HOME, "~", 1), "program": program}
+
+
+def blocks_of(window):
+    found = []
+    for layer in window.get("layers", []):
+        for block in layer.get("blocks", []):
+            found.append(block)
+    return found
+
+
+def take():
+    sessions = []
+    for row in jrex("ls", "--json").get("sessions", []):
+        label = row.get("label") or ""
+        session_id = row["session_id"]
+        if session_id == os.environ.get("REX_SESSION"):
+            continue  # the session this agent runs in
+        if label in BUILDERS:
+            sessions.append({"label": label, "builder": BUILDERS[label]})
+            continue
+        view = jrex("session", "inspect", session_id, "--json")
+        windows = []
+        for window in view.get("windows", []):
+            panes = []
+            for block in blocks_of(window):
+                info = pane_info(session_id, block["block_id"])
+                if info["program"] in SKIP_PROGRAMS:
+                    info["program"] = ""
+                panes.append({"label": block.get("label") or "", **info})
+            if panes:
+                windows.append({"label": window.get("label") or "", "panes": panes})
+        if windows:
+            sessions.append({"label": label, "windows": windows})
+    return {"sessions": sessions}
+
+
+def main():
+    if "--show" in sys.argv:
+        print(open(OUT).read() if os.path.exists(OUT) else "nothing saved yet")
+        return 0
+    data = take()
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    with open(OUT, "w") as f:
+        json.dump(data, f, indent=2)
+    for session in data["sessions"]:
+        if "builder" in session:
+            print(f"  {session['label']}  (built by {session['builder']})")
+        else:
+            tabs = len(session["windows"])
+            panes = sum(len(w["panes"]) for w in session["windows"])
+            print(f"  {session['label']}  {tabs} tabs, {panes} panes")
+    print(f"\nsaved to {OUT}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

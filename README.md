@@ -16,11 +16,28 @@ One Rex session, six tabs, built by `bin/comms`:
 | Web | Carbonyl behind an ad-filtering proxy, popups blocked, pages forced dark |
 | Bots | Whatever is in `~/.config/rex-comms/bots.tsv` |
 
+## After a reboot
+
+The Rex server does not survive a restart, so the sessions go with it. `snapshot` writes down
+what is open; `boot` puts it back.
+
+```sh
+snapshot      # save every session: tabs, panes, and the directory each one was in
+boot          # recreate anything from that file that is not already open
+boot --dry-run
+keep on       # save every 30 minutes and restore at login (launchd agents)
+```
+
+`Comms` is saved as a recipe rather than a layout, so `boot` rebuilds it with `bin/comms`.
+Other sessions come back as their tabs and panes, each in the right directory.
+
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `comms` | build or focus the session |
+| `snapshot` / `boot` | save the open sessions, put them back after a reboot |
+| `keep on` | do that automatically: save every 30 minutes, restore at login |
 | `web <url>` | browse in a pane, no ads, no popups (`--text` drops images too) |
 | `read <url>` | an article as plain text, without the page around it |
 | `news [url]` | headlines to pick from, then read |

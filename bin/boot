@@ -1,0 +1,115 @@
+#!/Users/ivan/rex/venv/bin/python
+"""Put the sessions back after a reboot.
+
+  boot              recreate anything in the snapshot that is not already open
+  boot --dry-run    say what it would do
+  boot --only www   just that session
+
+Reads ~/.config/rex-comms/sessions.json, written by `snapshot`.
+"""
+import json
+import os
+import subprocess
+import sys
+
+SNAP = os.path.expanduser("~/.config/rex-comms/sessions.json")
+HOME = os.path.expanduser("~")
+SHELLS = {"login", "zsh", "bash", "sh", "fish", "nu", ""}
+B, D, G, Y, R = "\033[1m", "\033[2m", "\033[32m", "\033[33m", "\033[0m"
+
+
+def rex(*args):
+    p = subprocess.run(["rex", *args], capture_output=True, text=True)
+    return p.stdout.strip()
+
+
+def open_sessions():
+    try:
+        rows = json.loads(rex("ls", "--json")).get("sessions", [])
+    except Exception:
+        rows = []
+    return {row.get("label"): row["session_id"] for row in rows}
+
+
+def expand(path):
+    return os.path.expanduser(path or "~")
+
+
+def make_session(session, dry):
+    label = session["label"]
+    windows = session.get("windows", [])
+    if not windows:
+        return
+    first_window = windows[0]
+    first_pane = first_window["panes"][0]
+    if dry:
+        print(f"  would create {B}{label}{R} with {len(windows)} tabs")
+        return
+    created = rex("new", label, "-c", expand(first_pane["cwd"]),
+                  "--window", first_window.get("label") or "Shell", "--json")
+    try:
+        session_id = json.loads(created)["session_id"]
+    except Exception:
+        print(f"  {Y}could not create {label}{R}")
+        return
+    anchor = json.loads(created)["initial_windows"][0]["block_ids"][0]
+    add_panes(session_id, anchor, first_window["panes"][1:])
+    for window in windows[1:]:
+        panes = window["panes"]
+        out = rex("window", "new", "-s", session_id, window.get("label") or "Shell",
+                  "-c", expand(panes[0]["cwd"]), "--focus=false", "--json")
+        try:
+            block = json.loads(out)["block_ids"][0]
+        except Exception:
+            continue
+        add_panes(session_id, block, panes[1:])
+    print(f"  {G}opened{R} {B}{label}{R}  {D}{len(windows)} tabs{R}")
+
+
+def add_panes(session_id, anchor, panes):
+    for pane in panes:
+        out = rex("split", "-s", session_id, "-b", anchor, "--split=right",
+                  "-c", expand(pane["cwd"]), "--focus=false", "--json")
+        try:
+            anchor = json.loads(out)["block_ids"][0]
+        except Exception:
+            return
+
+
+def main():
+    dry = "--dry-run" in sys.argv
+    only = None
+    if "--only" in sys.argv:
+        index = sys.argv.index("--only")
+        only = sys.argv[index + 1] if index + 1 < len(sys.argv) else None
+
+    if not os.path.exists(SNAP):
+        print(f"nothing saved yet — run {B}snapshot{R} while your sessions are open")
+        return 1
+    with open(SNAP) as f:
+        saved = json.load(f)
+
+    running = open_sessions()
+    print(f"{B}Restoring Rex{R}\n")
+    for session in saved.get("sessions", []):
+        label = session["label"]
+        if only and label != only:
+            continue
+        if label in running:
+            print(f"  {D}already open{R}  {label}")
+            continue
+        if session.get("builder"):
+            builder = expand(session["builder"])
+            if dry:
+                print(f"  would run {builder}")
+                continue
+            subprocess.run([builder], capture_output=True)
+            print(f"  {G}built{R} {B}{label}{R}  {D}{session['builder']}{R}")
+        else:
+            make_session(session, dry)
+    print(f"\n{D}snapshot: {SNAP}{R}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

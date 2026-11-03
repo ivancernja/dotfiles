@@ -107,8 +107,16 @@ for entry in "rex-gmail:Gmail app password" "rex-slack:Slack user token" "rex-di
 done
 printf '  %s•%s Calendar: System Settings → Privacy & Security → Calendars → Rex Beta\n' "$Y" "$R"
 
+step "Surviving reboots"
+if launchctl list 2>/dev/null | grep -q dev.rex.boot; then
+  ok "sessions are saved every 30 minutes and restored at login"
+else
+  todo "turn it on with:   keep on"
+fi
+
 step "Done"
 echo "  Open everything with:  rex do comms"
+echo "  Put sessions back after a reboot with:  boot"
 case "${1:-}" in
   --session) "$REX_DIR/bin/comms" >/dev/null && echo "  Comms session opened." ;;
 esac

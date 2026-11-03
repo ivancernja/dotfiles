@@ -1,0 +1,26 @@
+#!/bin/sh
+# Keep the setup across reboots.
+#   keep on     save sessions every 30 minutes, and put them back at login
+#   keep off    stop doing that
+#   keep now    save right now
+AGENTS="$HOME/Library/LaunchAgents"
+SRC="$HOME/rex/launchagents"
+case "${1:-status}" in
+  on)
+    mkdir -p "$AGENTS"
+    cp "$SRC/dev.rex.boot.plist" "$SRC/dev.rex.snapshot.plist" "$AGENTS/"
+    launchctl bootstrap gui/$(id -u) "$AGENTS/dev.rex.boot.plist" 2>/dev/null
+    launchctl bootstrap gui/$(id -u) "$AGENTS/dev.rex.snapshot.plist" 2>/dev/null
+    echo "on: sessions saved every 30 minutes, restored at login"
+    ;;
+  off)
+    launchctl bootout gui/$(id -u)/dev.rex.boot 2>/dev/null
+    launchctl bootout gui/$(id -u)/dev.rex.snapshot 2>/dev/null
+    rm -f "$AGENTS/dev.rex.boot.plist" "$AGENTS/dev.rex.snapshot.plist"
+    echo "off"
+    ;;
+  now) exec "$HOME/rex/bin/snapshot" ;;
+  *)
+    launchctl list 2>/dev/null | grep -q dev.rex.boot && echo "on" || echo "off  (turn it on with: keep on)"
+    ;;
+esac
