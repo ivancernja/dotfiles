@@ -20,9 +20,6 @@ tab "󰠹  TV" "$BIN/tv-pane"
 # The rest only belong on the machine that actually runs these things, which is
 # the mini. On a laptop they would be four tabs of nothing.
 if command -v docker >/dev/null 2>&1; then tab "󰋜  House" "$BIN/house-pane"; fi
-if curl -fsS -m 2 -o /dev/null http://127.0.0.1:8080/api/v2/app/version 2>/dev/null; then
-  tab "󰇚  Downloads" "$BIN/downloads-pane"
-fi
 if curl -fsS -m 2 -o /dev/null http://127.0.0.1:8777/admin/status 2>/dev/null; then
   tab "󰗚  Reading" "$BIN/reading-pane"
 fi
