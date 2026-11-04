@@ -104,6 +104,8 @@ def main():
     print(f"{B}Restoring Rex{R}\n")
     if not dry:
         tailnet()
+        subprocess.run([os.path.expanduser("~/rex/bin/mini-link")],
+                       capture_output=True)
     for session in saved.get("sessions", []):
         label = session["label"]
         if only and label != only:

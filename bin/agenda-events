@@ -1,20 +1,105 @@
 #!/Users/ivan/rex/venv/bin/python
-"""Today's and tomorrow's events, straight from EventKit.
+"""The next few days of events, tab separated:
 
-Prints one event per line, tab separated:
     day  start  end  title  calendar  location
-day is 0 for today, 1 for tomorrow, negative for something that began earlier and is still
-running. Prints DENIED if macOS has not granted calendar access.
+
+day is 0 for today, 1 for tomorrow, negative for something that began earlier
+and is still running. Prints DENIED if no backend can read your calendars.
+
+Two backends. If ~/.config/rex-comms/calendars.json lists subscription URLs,
+those are fetched and parsed, which works on any machine, including a headless
+one that can never show a permission prompt. Otherwise it asks EventKit, which
+is faster and needs no setup but only works where macOS has granted access.
 """
 import datetime
+import json
+import os
 import sys
-import threading
 
-import EventKit
-import Foundation
+CONFIG = os.path.expanduser("~/.config/rex-comms/calendars.json")
+CACHE = os.path.expanduser("~/.config/rex-comms/cache")
 
 
-def main():
+def window():
+    days = 2
+    if len(sys.argv) > 1 and sys.argv[1].isdigit():
+        days = int(sys.argv[1])
+    midnight = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight, days
+
+
+def emit(rows, midnight):
+    for when, finish, all_day, title, calendar, location in sorted(rows, key=lambda r: r[0]):
+        day = (when.date() - midnight.date()).days
+        label = "all day" if all_day else when.strftime("%H:%M")
+        ends = "" if all_day or not finish else finish.strftime("%H:%M")
+        location = (location or "").replace("\n", " ").strip()
+        print(f"{day}\t{label}\t{ends}\t{title or '(untitled)'}\t{calendar}\t{location}")
+
+
+def from_ics(midnight, days):
+    import urllib.request
+
+    import icalendar
+    import recurring_ical_events
+
+    with open(CONFIG) as f:
+        calendars = json.load(f).get("calendars", [])
+    if not calendars:
+        return None
+
+    os.makedirs(CACHE, exist_ok=True)
+    local = datetime.datetime.now().astimezone().tzinfo
+    end = midnight + datetime.timedelta(days=days)
+    rows = []
+    reached = False
+
+    for entry in calendars:
+        name = entry.get("name") or "calendar"
+        cached = os.path.join(CACHE, "".join(c if c.isalnum() else "-" for c in name) + ".ics")
+        raw = None
+        try:
+            request = urllib.request.Request(entry["url"], headers={"User-Agent": "rex-agenda"})
+            with urllib.request.urlopen(request, timeout=20) as response:
+                raw = response.read()
+            with open(cached, "wb") as f:
+                f.write(raw)
+            reached = True
+        except Exception:
+            if os.path.exists(cached):
+                with open(cached, "rb") as f:
+                    raw = f.read()
+        if not raw:
+            continue
+
+        calendar = icalendar.Calendar.from_ical(raw)
+        for event in recurring_ical_events.of(calendar).between(midnight, end):
+            start = event.get("DTSTART").dt
+            finish = event.get("DTEND").dt if event.get("DTEND") else None
+            all_day = not isinstance(start, datetime.datetime)
+            if all_day:
+                start = datetime.datetime.combine(start, datetime.time.min)
+                finish = None
+            else:
+                start = start.astimezone(local).replace(tzinfo=None)
+                if finish is not None and isinstance(finish, datetime.datetime):
+                    finish = finish.astimezone(local).replace(tzinfo=None)
+                else:
+                    finish = None
+            rows.append((start, finish, all_day, str(event.get("SUMMARY") or ""),
+                         name, str(event.get("LOCATION") or "")))
+
+    if not rows and not reached:
+        return None
+    return rows
+
+
+def from_eventkit(midnight, days):
+    import threading
+
+    import EventKit
+    import Foundation
+
     store = EventKit.EKEventStore.alloc().init()
     done = threading.Event()
     granted = {"ok": False}
@@ -34,28 +119,40 @@ def main():
         loop.runMode_beforeDate_(Foundation.NSDefaultRunLoopMode,
                                  Foundation.NSDate.dateWithTimeIntervalSinceNow_(0.05))
     if not granted["ok"]:
-        print("DENIED")
-        return 1
+        return None
 
-    days = 2
-    if len(sys.argv) > 1 and sys.argv[1].isdigit():
-        days = int(sys.argv[1])
-    midnight = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     start = Foundation.NSDate.dateWithTimeIntervalSince1970_(midnight.timestamp())
     end = Foundation.NSDate.dateWithTimeIntervalSince1970_(midnight.timestamp() + days * 86400)
     predicate = store.predicateForEventsWithStartDate_endDate_calendars_(start, end, None)
+    rows = []
     for event in store.eventsMatchingPredicate_(predicate) or []:
         when = datetime.datetime.fromtimestamp(event.startDate().timeIntervalSince1970())
-        day = (when.date() - midnight.date()).days
-        label = "all day" if event.isAllDay() else when.strftime("%H:%M")
-        finish = ""
+        finish = None
         if event.endDate() and not event.isAllDay():
-            finish = datetime.datetime.fromtimestamp(
-                event.endDate().timeIntervalSince1970()).strftime("%H:%M")
-        title = event.title() or "(untitled)"
-        calendar = event.calendar().title() if event.calendar() else ""
-        location = (event.location() or "").replace("\n", " ").strip()
-        print(f"{day}\t{label}\t{finish}\t{title}\t{calendar}\t{location}")
+            finish = datetime.datetime.fromtimestamp(event.endDate().timeIntervalSince1970())
+        rows.append((when, finish, bool(event.isAllDay()), event.title(),
+                     event.calendar().title() if event.calendar() else "",
+                     event.location()))
+    return rows
+
+
+def main():
+    midnight, days = window()
+    rows = None
+    if os.path.exists(CONFIG):
+        try:
+            rows = from_ics(midnight, days)
+        except Exception as error:
+            print(f"# ics backend failed: {error}", file=sys.stderr)
+    if rows is None:
+        try:
+            rows = from_eventkit(midnight, days)
+        except Exception:
+            rows = None
+    if rows is None:
+        print("DENIED")
+        return 1
+    emit(rows, midnight)
     return 0
 
 

@@ -1,45 +1,91 @@
 #!/Users/ivan/rex/venv/bin/python
-"""The GrokBot workforce as a chat you click: bots on the left, the conversation on the right."""
+"""The GrokBot workforce as a chat you click: bots on the left, conversation on the right.
+
+Talks to one long-lived grokbot-mcp process rather than running the CLI per call.
+The CLI pays a fresh TLS handshake and Keychain read every time (~3s); the
+persistent process reuses both (~0.35s).
+"""
 import json
+import os
 import shutil
 import subprocess
+import threading
 from datetime import datetime, timezone
 
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import (DataTable, Footer, Header, Input, Label, Markdown,
                              Static)
 
-GROKBOT = shutil.which("grokbot") or "/Users/ivan/.nvm/versions/node/v24.15.0/bin/grokbot"
+NODE = shutil.which("node") or "/Users/ivan/.nvm/versions/node/v24.15.0/bin/node"
+SERVER = os.path.expanduser("~/grokbot-cli/packages/grokbot-mcp/dist/index.js")
 HISTORY = 30
 
 
-def run_json(args, timeout=120):
-    """Returns (data, error). grokbot puts JSON on stdout and errors on stderr."""
-    try:
-        done = subprocess.run([GROKBOT, *args], capture_output=True, text=True,
-                              timeout=timeout)
-    except FileNotFoundError:
-        return {}, "grokbot is not installed on this PATH"
-    except subprocess.TimeoutExpired:
-        return {}, "grokbot timed out"
-    except Exception as exc:
-        return {}, str(exc)
-    data = {}
-    if done.stdout.strip():
-        try:
-            data = json.loads(done.stdout)
-        except ValueError:
-            pass
-    if done.returncode != 0:
-        line = (done.stderr or "").strip().splitlines()
-        return data, line[0] if line else f"exit {done.returncode}"
-    return data, ""
+class Mcp:
+    """One grokbot-mcp process, restarted if it dies. Calls are serialised."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.proc = None
+        self.rid = 0
+
+    def _write(self, msg):
+        self.proc.stdin.write(json.dumps(msg) + "\n")
+        self.proc.stdin.flush()
+
+    def _read(self, rid):
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:
+                raise OSError("grokbot-mcp stopped")
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if msg.get("id") == rid:
+                return msg
+
+    def _start(self):
+        self.proc = subprocess.Popen(
+            [NODE, SERVER], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        self.rid += 1
+        self._write({"jsonrpc": "2.0", "id": self.rid, "method": "initialize",
+                     "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                                "clientInfo": {"name": "rex-grokbots", "version": "1"}}})
+        self._read(self.rid)
+        self._write({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    def call(self, tool, args=None):
+        """Returns (structuredContent, error)."""
+        with self.lock:
+            try:
+                if self.proc is None or self.proc.poll() is not None:
+                    self._start()
+                self.rid += 1
+                rid = self.rid
+                self._write({"jsonrpc": "2.0", "id": rid, "method": "tools/call",
+                             "params": {"name": tool, "arguments": args or {}}})
+                msg = self._read(rid)
+            except Exception as exc:
+                self.proc = None
+                return {}, str(exc)
+        if "error" in msg:
+            return {}, str(msg["error"].get("message", "call failed"))
+        result = msg.get("result", {}) or {}
+        if result.get("isError"):
+            parts = result.get("content") or [{}]
+            return {}, (parts[0].get("text") or "failed").strip().splitlines()[0]
+        return result.get("structuredContent") or {}, ""
+
+    def stop(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
 
 
 def split_name(name):
-    """'Felix - Growth partner' reads better as two fields than one."""
     parts = [p.strip() for p in str(name or "").split("·")]
     if len(parts) >= 2:
         return parts[0], " ".join(parts[1:])
@@ -67,7 +113,6 @@ def clock(ms):
 
 
 def text_of(entry):
-    """The readable text of a transcript entry, or None for one we do not show."""
     if entry.get("kind") == "user-message":
         return "you", entry.get("content") or ""
     if entry.get("kind") == "reply":
@@ -78,6 +123,9 @@ def text_of(entry):
 
 
 class GrokBots(App):
+    # Below 76 columns (an iPhone in Rex) the two panes stack into one.
+    HORIZONTAL_BREAKPOINTS = [(0, "-narrow"), (76, "-wide")]
+
     CSS = """
     Screen { background: #11151c; color: #c9d3df; layout: horizontal; }
     #sidebar { width: 34; background: #0e1219; border-right: solid #262e3a; }
@@ -95,18 +143,31 @@ class GrokBots(App):
     Input { background: #1d242e; color: #c9d3df; border: none; }
     Input:focus { border: none; background: #26303c; }
     #note { height: auto; padding: 0 2 1 2; color: #71808f; background: #151b23; }
+
+    /* One column on a phone: the chat, or the bot list, never both. */
+    Screen.-narrow #sidebar { display: none; }
+    Screen.-narrow #right { width: 100%; }
+    Screen.-narrow #convo { padding: 0 1; }
+    Screen.-narrow #who { padding: 0 1; }
+    Screen.-narrow #composer { padding: 0 1 1 1; }
+    Screen.-narrow #note { padding: 0 1 1 1; }
+    Screen.-narrow.-pick #sidebar { display: block; width: 100%; border-right: none; }
+    Screen.-narrow.-pick #right { display: none; }
     """
     BINDINGS = [
         ("q", "quit", "Quit"),
+        ("b", "bots", "Bots"),
         ("r", "reload", "Refresh"),
         ("ctrl+k", "interrupt", "Interrupt"),
     ]
 
     def __init__(self):
         super().__init__()
+        self.mcp = Mcp()
         self.bots = []
         self.current = None
         self.busy = False
+        self.tick = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -117,20 +178,31 @@ class GrokBots(App):
             yield Label("", id="who")
             yield VerticalScroll(id="convo")
             with Vertical(id="composer"):
-                yield Input(placeholder="Pick a bot on the left", id="say")
+                yield Input(placeholder="Pick a bot", id="say")
             yield Label("", id="note")
         yield Footer()
 
     def on_mount(self):
         self.title = "GrokBots"
-        table = self.query_one("#bots", DataTable)
-        table.add_columns("bot", "")
+        self.query_one("#bots", DataTable).add_columns("bot", "")
         self.load_bots()
         self.set_interval(45, self.load_bots)
         self.set_interval(15, self.poll)
 
+    def on_unmount(self):
+        self.mcp.stop()
+
     def note(self, text):
         self.query_one("#note", Label).update(text)
+
+    @property
+    def narrow(self):
+        return self.screen.has_class("-narrow")
+
+    def action_bots(self):
+        self.screen.toggle_class("-pick")
+        if self.screen.has_class("-pick"):
+            self.query_one("#bots", DataTable).focus()
 
     def action_reload(self):
         self.load_bots()
@@ -139,24 +211,18 @@ class GrokBots(App):
 
     def action_interrupt(self):
         if self.current:
-            self.fire(["interrupt", "--agent", self.current, "--json"], "interrupted")
-
-    # ---------- bots ----------
+            self.fire("grokbot_interrupt", {"agent": self.current}, "interrupted")
 
     @work(thread=True, exclusive=True, group="bots")
     def load_bots(self):
-        data, err = run_json(["team", "--json"])
+        data, err = self.mcp.call("grokbot_team")
         bots = []
         for m in data.get("members", []) or []:
             agent = m.get("agent", {}) or {}
             who, role = split_name(agent.get("name"))
-            bots.append({
-                "id": agent.get("agentId"),
-                "who": who,
-                "role": role,
-                "name": agent.get("name") or who,
-                "status": status_of(m.get("status")),
-            })
+            bots.append({"id": agent.get("agentId"), "who": who, "role": role,
+                         "name": agent.get("name") or who,
+                         "status": status_of(m.get("status"))})
         self.call_from_thread(self.show_bots, bots, err)
 
     def show_bots(self, bots, err):
@@ -175,8 +241,16 @@ class GrokBots(App):
             table.move_cursor(row=keep)
 
     @on(DataTable.RowHighlighted, "#bots")
-    def on_pick(self, event: DataTable.RowHighlighted):
+    def on_highlight(self, event: DataTable.RowHighlighted):
+        if not self.narrow:
+            self.pick(event.cursor_row)
+
+    @on(DataTable.RowSelected, "#bots")
+    def on_select(self, event: DataTable.RowSelected):
         self.pick(event.cursor_row)
+        if self.narrow:
+            self.screen.remove_class("-pick")
+            self.query_one("#say", Input).focus()
 
     def pick(self, index):
         if not (0 <= index < len(self.bots)):
@@ -185,18 +259,16 @@ class GrokBots(App):
         if bot["id"] == self.current:
             return
         self.current = bot["id"]
-        label = bot["name"] if not bot["role"] else f"{bot['who']}   {bot['role']}"
-        self.query_one("#who", Label).update(label)
+        self.query_one("#who", Label).update(
+            bot["who"] if not bot["role"] else f"{bot['who']}   {bot['role']}")
         self.query_one("#say", Input).placeholder = f"Message {bot['who']}"
         self.query_one("#convo", VerticalScroll).remove_children()
-        self.note("loading the conversation")
+        self.note("loading")
         self.load_convo(bot["id"])
-
-    # ---------- conversation ----------
 
     @work(thread=True, exclusive=True, group="convo")
     def load_convo(self, agent_id):
-        data, err = run_json(["tail", "-n", str(HISTORY), "--agent", agent_id, "--json"])
+        data, err = self.mcp.call("grokbot_tail", {"agent": agent_id, "limit": HISTORY})
         msgs = []
         for e in data.get("entries", []) or []:
             got = text_of(e)
@@ -211,19 +283,20 @@ class GrokBots(App):
         convo.remove_children()
         who = next((b["who"] for b in self.bots if b["id"] == agent_id), "bot")
         for sender, body, when in msgs:
-            name = "You" if sender == "you" else who
-            css = "from-you" if sender == "you" else "from"
-            convo.mount(Static(f"{name}   {when}", classes=css))
+            convo.mount(Static(f"{'You' if sender == 'you' else who}   {when}",
+                               classes="from-you" if sender == "you" else "from"))
             convo.mount(Markdown(body))
         convo.scroll_end(animate=False)
         self.note(err if err else f"refreshed {datetime.now().strftime('%H:%M')}")
 
     def poll(self):
-        """Keep the open conversation current without the user asking."""
-        if self.current and not self.busy:
+        """Often while a bot works, rarely when it does not."""
+        self.tick += 1
+        if not self.current or self.busy:
+            return
+        working = any(b["id"] == self.current and b["status"] for b in self.bots)
+        if working or self.tick % 4 == 0:
             self.load_convo(self.current)
-
-    # ---------- sending ----------
 
     @on(Input.Submitted, "#say")
     def on_say(self, event: Input.Submitted):
@@ -235,13 +308,13 @@ class GrokBots(App):
         convo.mount(Static(f"You   {datetime.now().strftime('%H:%M')}", classes="from-you"))
         convo.mount(Markdown(text))
         convo.scroll_end(animate=False)
-        self.fire(["send", text, "--agent", self.current, "--json"], "sent")
+        self.fire("grokbot_send", {"text": text, "agent": self.current}, "sent")
 
     @work(thread=True, group="fire")
-    def fire(self, args, done_word):
+    def fire(self, tool, args, done_word):
         self.busy = True
-        self.call_from_thread(self.note, f"{done_word[:-1]}ing" if done_word.endswith("t") else "working")
-        data, err = run_json(args, timeout=180)
+        self.call_from_thread(self.note, "working")
+        data, err = self.mcp.call(tool, args)
         job = data.get("jobId") or data.get("job") or ""
         self.busy = False
         self.call_from_thread(self.note, err if err else f"{done_word}{' ' + job if job else ''}")

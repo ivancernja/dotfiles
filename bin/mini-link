@@ -1,0 +1,48 @@
+#!/bin/sh
+# Point a local socket at the Mac mini's Rex server, over ssh.
+#
+#   mini-link           make sure the link is up (idempotent)
+#   mini-link status    say whether it is up
+#   mini-link stop      take it down
+#
+# The mini's server listens on a unix socket and on its tailnet node. The
+# tailnet address only resolves when this machine's Tailscale is on the same
+# tailnet, which it is not while you are signed in to work. ssh does not care,
+# so this is the path that works from here. `rex -S mini ...` tries the socket
+# first and falls back to the tailnet address.
+
+SOCK="$HOME/.config/rex-comms/mini.sock"
+REMOTE="/Users/ivan/Library/Application Support/rex/server.sock"
+
+up() {
+    [ -S "$SOCK" ] || return 1
+    rex -S "unix://$SOCK" --timeout 5s whoami >/dev/null 2>&1
+}
+
+case "$1" in
+status)
+    if up; then echo "mini: linked  $SOCK"; else echo "mini: down"; exit 1; fi
+    ;;
+stop)
+    pkill -f "StreamLocalBindUnlink=yes.*$SOCK" 2>/dev/null
+    rm -f "$SOCK"
+    echo "mini: down"
+    ;;
+*)
+    if up; then
+        echo "mini: already linked"
+        exit 0
+    fi
+    pkill -f "StreamLocalBindUnlink=yes.*$SOCK" 2>/dev/null
+    rm -f "$SOCK"
+    mkdir -p "$(dirname "$SOCK")"
+    ssh -f -N -o BatchMode=yes -o ExitOnForwardFailure=yes \
+        -o StreamLocalBindUnlink=yes \
+        -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+        -L "$SOCK:$REMOTE" mini || {
+        echo "mini: ssh failed — is it awake? (ssh mini)" >&2
+        exit 1
+    }
+    if up; then echo "mini: linked  $SOCK"; else echo "mini: ssh is up but Rex did not answer" >&2; exit 1; fi
+    ;;
+esac

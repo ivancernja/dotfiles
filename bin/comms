@@ -2,7 +2,6 @@
 # Build the Home session, or focus it if it is already running.
 set -e
 BIN="$HOME/rex/bin"
-icon() { printf "$1"; }
 
 sid=$(rex ls --json | jq -r '.sessions[]? | select(.label=="Home") | .session_id' | head -1)
 if [ -n "$sid" ]; then
@@ -11,8 +10,8 @@ if [ -n "$sid" ]; then
   exit 0
 fi
 
-created=$(rex new Home --window "$(icon '\U000F00ED')  Calendar" --json -- "$BIN/agenda-pane")
+created=$(rex new Home --window "󰃭  Calendar" --json -- "$BIN/agenda-pane")
 sid=$(printf '%s' "$created" | jq -er '.session_id')
-rex window new -s "$sid" "$(icon '\U000F0839')  TV" --focus=false --keep-open -- "$BIN/tv-pane" >/dev/null
+rex window new -s "$sid" "󰠹  TV" --focus=false --keep-open -- "$BIN/tv-pane" >/dev/null
 rex do session.select session_id="$sid" 2>/dev/null || true
 echo "$sid"

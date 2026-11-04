@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.rex.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/ivan/rexsrv/Rex Server.rex/Contents/MacOS/rex</string>
+    <string>server</string>
+    <string>run</string>
+    <string>--tailscale</string>
+    <string>--tailscale-hostname</string>
+    <string>mini</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>/Users/ivan/Library/Logs/rex-server.log</string>
+  <key>StandardErrorPath</key><string>/Users/ivan/Library/Logs/rex-server.log</string>
+</dict>
+</plist>
