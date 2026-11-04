@@ -1,0 +1,248 @@
+#!/Users/ivan/rex/venv/bin/python
+"""Everything this machine keeps running, in one pane you can click.
+
+Containers and launch agents side by side, because the two halves of the house
+were only ever visible from two different places, and something that quietly
+stops working stays stopped for weeks.
+"""
+import json
+import os
+import shutil
+import subprocess
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical
+from textual.widgets import (Button, DataTable, Footer, Header, Label,
+                             TabbedContent, TabPane)
+
+DOCKER = shutil.which("docker") or "/usr/local/bin/docker"
+AGENTS = os.path.expanduser("~/Library/LaunchAgents")
+
+
+def run(args, timeout=20):
+    try:
+        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        return p.stdout
+    except Exception:
+        return ""
+
+
+def containers():
+    rows = []
+    out = run([DOCKER, "ps", "-a", "--format", "{{json .}}"])
+    for line in out.splitlines():
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        name = item.get("Names", "")
+        status = item.get("Status", "")
+        health = ""
+        if "(healthy)" in status:
+            health = "healthy"
+        elif "(unhealthy)" in status:
+            health = "unhealthy"
+        elif "(health: starting)" in status:
+            health = "starting"
+        rows.append({
+            "name": name,
+            "image": item.get("Image", "").split("/")[-1][:28],
+            "state": item.get("State", ""),
+            "health": health,
+            "status": status,
+        })
+    return sorted(rows, key=lambda r: r["name"])
+
+
+def agents():
+    """Only the agents in ~/Library/LaunchAgents: the ones that are yours."""
+    mine = set()
+    try:
+        for entry in os.listdir(AGENTS):
+            if entry.endswith(".plist"):
+                mine.add(entry[: -len(".plist")])
+    except Exception:
+        pass
+    rows = []
+    for line in run(["/bin/launchctl", "list"]).splitlines()[1:]:
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        pid, status, label = parts[0], parts[1], parts[2].strip()
+        if label not in mine:
+            continue
+        rows.append({
+            "label": label,
+            "pid": "" if pid == "-" else pid,
+            "status": status,
+            "running": pid != "-",
+        })
+    for label in sorted(mine - {r["label"] for r in rows}):
+        rows.append({"label": label, "pid": "", "status": "-", "running": False})
+    return sorted(rows, key=lambda r: r["label"])
+
+
+def disks():
+    found = []
+    for path in ("/", "/Volumes/Media"):
+        if not os.path.ismount(path) and path != "/":
+            continue
+        out = run(["/bin/df", "-h", path]).splitlines()
+        if len(out) >= 2:
+            parts = out[1].split()
+            if len(parts) >= 5:
+                found.append((path, parts[3], parts[4]))
+    return found
+
+
+class HousePane(App):
+    CSS = """
+    Screen { background: #11151c; color: #c9d3df; }
+    #status { height: auto; padding: 1 2; background: #171d26; border-bottom: solid #262e3a; }
+    #headline { text-style: bold; }
+    .dim { color: #71808f; }
+    .bad { color: #e88b8b; text-style: bold; }
+    .good { color: #5ad1c4; }
+    Button { background: #1d242e; color: #c9d3df; border: none; margin: 0 1 1 0; min-width: 13; }
+    Button:hover { background: #26303c; color: #5ad1c4; }
+    Horizontal { height: auto; }
+    DataTable { height: 1fr; background: #11151c; }
+    DataTable > .datatable--header { background: #171d26; color: #71808f; text-style: bold; }
+    DataTable > .datatable--cursor { background: #26303c; }
+    TabbedContent { height: 1fr; }
+    Tabs { background: #171d26; }
+    #detail { height: auto; max-height: 12; padding: 0 2; color: #71808f; }
+    """
+    BINDINGS = [("q", "quit", "Quit"), ("r", "refresh", "Refresh")]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Vertical(id="status"):
+            yield Label("reading the house…", id="headline")
+            yield Label("", id="disks", classes="dim")
+        with TabbedContent():
+            with TabPane("Services", id="services"):
+                yield DataTable(id="containers", cursor_type="row", zebra_stripes=False)
+                with Horizontal():
+                    yield Button("Restart", id="restart-container")
+                    yield Button("Logs", id="logs-container")
+                yield Label("", id="detail")
+            with TabPane("Agents", id="agents"):
+                yield DataTable(id="launchagents", cursor_type="row", zebra_stripes=False)
+                with Horizontal():
+                    yield Button("Restart", id="restart-agent")
+                yield Label("", id="agent-detail")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "House"
+        table = self.query_one("#containers", DataTable)
+        table.add_columns("service", "image", "state", "health")
+        agents_table = self.query_one("#launchagents", DataTable)
+        agents_table.add_columns("agent", "pid", "last exit")
+        self.rows = {}
+        self.agent_rows = {}
+        self.set_interval(20, self.refresh_all)
+        self.refresh_all()
+
+    def action_refresh(self) -> None:
+        self.refresh_all()
+
+    def refresh_all(self) -> None:
+        self.load()
+
+    @work(thread=True, exclusive=True)
+    def load(self) -> None:
+        data = {"containers": containers(), "agents": agents(), "disks": disks()}
+        self.call_from_thread(self.show, data)
+
+    def show(self, data) -> None:
+        table = self.query_one("#containers", DataTable)
+        table.clear()
+        self.rows = {}
+        for row in data["containers"]:
+            state = row["state"]
+            health = row["health"] or "—"
+            key = table.add_row(row["name"], row["image"], state, health)
+            self.rows[key] = row
+        agents_table = self.query_one("#launchagents", DataTable)
+        agents_table.clear()
+        self.agent_rows = {}
+        for row in data["agents"]:
+            key = agents_table.add_row(row["label"], row["pid"] or "—", row["status"])
+            self.agent_rows[key] = row
+
+        running = sum(1 for r in data["containers"] if r["state"] == "running")
+        sick = [r["name"] for r in data["containers"] if r["health"] == "unhealthy"]
+        stopped = [r["label"] for r in data["agents"] if not r["running"]
+                   and r["status"] not in ("0", "-")]
+        headline = self.query_one("#headline", Label)
+        parts = [f"{running}/{len(data['containers'])} containers up",
+                 f"{sum(1 for r in data['agents'] if r['running'])}/{len(data['agents'])} agents up"]
+        text = "   ".join(parts)
+        if sick:
+            text += f"    unhealthy: {', '.join(sick)}"
+        if stopped:
+            text += f"    failed: {', '.join(stopped[:3])}"
+        headline.update(text)
+        headline.set_class(bool(sick or stopped), "bad")
+        self.query_one("#disks", Label).update(
+            "      ".join(f"{p}  {free} free, {used} used" for p, free, used in data["disks"]))
+
+    @on(DataTable.RowHighlighted, "#containers")
+    def container_row(self, event: DataTable.RowHighlighted) -> None:
+        row = self.rows.get(event.row_key)
+        if row:
+            self.query_one("#detail", Label).update(row["status"])
+
+    @on(DataTable.RowHighlighted, "#launchagents")
+    def agent_row(self, event: DataTable.RowHighlighted) -> None:
+        row = self.agent_rows.get(event.row_key)
+        if row:
+            state = "running" if row["running"] else "not running"
+            self.query_one("#agent-detail", Label).update(
+                f"{row['label']}   {state}, last exit {row['status']}")
+
+    @on(Button.Pressed, "#restart-container")
+    def restart_container(self) -> None:
+        table = self.query_one("#containers", DataTable)
+        row = self.rows.get(table.coordinate_to_cell_key(table.cursor_coordinate).row_key)
+        if row:
+            self.query_one("#detail", Label).update(f"restarting {row['name']}…")
+            self.do_restart(row["name"])
+
+    @work(thread=True)
+    def do_restart(self, name) -> None:
+        run([DOCKER, "restart", name], timeout=90)
+        self.call_from_thread(self.refresh_all)
+
+    @on(Button.Pressed, "#logs-container")
+    def container_logs(self) -> None:
+        table = self.query_one("#containers", DataTable)
+        row = self.rows.get(table.coordinate_to_cell_key(table.cursor_coordinate).row_key)
+        if row:
+            self.read_logs(row["name"])
+
+    @work(thread=True)
+    def read_logs(self, name) -> None:
+        out = run([DOCKER, "logs", "--tail", "10", name], timeout=20)
+        text = "\n".join(line[:110] for line in out.strip().splitlines()[-10:])
+        self.call_from_thread(self.query_one("#detail", Label).update, text or "no output")
+
+    @on(Button.Pressed, "#restart-agent")
+    def restart_agent(self) -> None:
+        table = self.query_one("#launchagents", DataTable)
+        row = self.agent_rows.get(table.coordinate_to_cell_key(table.cursor_coordinate).row_key)
+        if row:
+            self.query_one("#agent-detail", Label).update(f"restarting {row['label']}…")
+            self.do_kickstart(row["label"])
+
+    @work(thread=True)
+    def do_kickstart(self, label) -> None:
+        run(["/bin/launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"], timeout=30)
+        self.call_from_thread(self.refresh_all)
+
+
+if __name__ == "__main__":
+    HousePane().run()

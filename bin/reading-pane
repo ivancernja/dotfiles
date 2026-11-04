@@ -1,0 +1,233 @@
+#!/Users/ivan/rex/venv/bin/python
+"""The reading companion as a pane: the shelf, the list, and what you marked.
+
+It talks to the companion service already running on this machine, the same one
+behind the reader. Admin only listens on loopback, so this has to run here.
+"""
+import json
+import os
+import urllib.error
+import urllib.request
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical
+from textual.widgets import (Button, DataTable, Footer, Header, Input, Label,
+                             TabbedContent, TabPane)
+
+ADMIN = os.environ.get("COMPANION_ADMIN", "http://127.0.0.1:8777")
+
+
+def api(path, payload=None, timeout=30):
+    url = f"{ADMIN}{path}"
+    request = urllib.request.Request(url)
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode()
+        request.add_header("content-type", "application/json")
+        request.method = "POST"
+    try:
+        with urllib.request.urlopen(request, data=body, timeout=timeout) as response:
+            text = response.read().decode()
+        return json.loads(text) if text.strip() else {}
+    except urllib.error.HTTPError as error:
+        try:
+            return {"error": json.loads(error.read().decode()).get("error", str(error))}
+        except Exception:
+            return {"error": f"{error.code}"}
+    except Exception as error:
+        return {"error": str(error)}
+
+
+def size(n):
+    try:
+        return f"{float(n) / 1_048_576:.1f}M"
+    except Exception:
+        return ""
+
+
+def percent(item):
+    pages = item.get("pages") or 0
+    progress = item.get("progress") or 0
+    if progress:
+        return f"{progress * 100:.0f}%" if progress <= 1 else f"{progress:.0f}%"
+    return "—" if not pages else "0%"
+
+
+class Reading(App):
+    CSS = """
+    Screen { background: #11151c; color: #c9d3df; }
+    #status { height: auto; padding: 1 2; background: #171d26; border-bottom: solid #262e3a; }
+    #headline { text-style: bold; }
+    .dim { color: #71808f; }
+    .bad { color: #e88b8b; text-style: bold; }
+    Button { background: #1d242e; color: #c9d3df; border: none; margin: 0 1 1 0; min-width: 12; }
+    Button:hover { background: #26303c; color: #5ad1c4; }
+    Horizontal { height: auto; }
+    Input { background: #1d242e; border: tall #262e3a; color: #c9d3df; width: 46; margin-right: 2; }
+    Input:focus { border: tall #5ad1c4; }
+    DataTable { height: 1fr; background: #11151c; }
+    DataTable > .datatable--header { background: #171d26; color: #71808f; text-style: bold; }
+    DataTable > .datatable--cursor { background: #26303c; }
+    TabbedContent { height: 1fr; }
+    Tabs { background: #171d26; }
+    #detail { height: auto; max-height: 8; padding: 0 2; color: #71808f; }
+    """
+    BINDINGS = [("q", "quit", "Quit"), ("r", "refresh", "Refresh")]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Vertical(id="status"):
+            yield Label("asking the companion…", id="headline")
+            yield Label("", id="sub", classes="dim")
+        with Horizontal():
+            yield Input(placeholder="paste a book URL to send to the reader", id="url")
+            yield Button("Send", id="send")
+            yield Button("Sync", id="sync")
+            yield Button("Back up", id="backup")
+        with TabbedContent():
+            with TabPane("Library", id="library"):
+                yield DataTable(id="books", cursor_type="row", zebra_stripes=False)
+            with TabPane("Wishlist", id="wishlist"):
+                yield DataTable(id="wanted", cursor_type="row", zebra_stripes=False)
+            with TabPane("Highlights", id="highlights"):
+                yield DataTable(id="marks", cursor_type="row", zebra_stripes=False)
+        yield Label("", id="detail")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "Reading"
+        self.query_one("#books", DataTable).add_columns("title", "author", "format", "sent", "read")
+        self.query_one("#wanted", DataTable).add_columns("title", "author", "status")
+        self.query_one("#marks", DataTable).add_columns("book", "chapter", "passage")
+        self.books, self.wanted, self.marks = {}, {}, {}
+        self.set_interval(60, self.refresh_all)
+        self.refresh_all()
+
+    def action_refresh(self) -> None:
+        self.refresh_all()
+
+    def refresh_all(self) -> None:
+        self.load()
+
+    @work(thread=True, exclusive=True)
+    def load(self) -> None:
+        data = {"status": api("/admin/status"), "catalog": api("/admin/catalog"),
+                "backups": api("/admin/backups")}
+        self.call_from_thread(self.show, data)
+
+    def show(self, data) -> None:
+        status = data["status"] or {}
+        catalog = data["catalog"] or {}
+        library = catalog.get("library", [])
+        wishlist = catalog.get("wishlist", [])
+        highlights = catalog.get("highlights", [])
+        headline = self.query_one("#headline", Label)
+        if status.get("error"):
+            headline.update(f"companion not answering: {status['error']}")
+            headline.set_classes("bad")
+        else:
+            headline.update(f"{len(library)} books      {len(wishlist)} wanted      "
+                            f"{len(highlights)} highlights")
+            headline.set_classes("")
+        bits = []
+        bits.append("reader paired" if status.get("readerProvisioned") else "reader not paired")
+        bits.append("assistant connected" if status.get("chatgptConnected")
+                    else "assistant not connected")
+        backups = (data["backups"] or {}).get("backups", [])
+        if backups:
+            bits.append(f"last backup {backups[0]['createdAt'][:10]}")
+        self.query_one("#sub", Label).update("      ".join(bits))
+
+        table = self.query_one("#books", DataTable)
+        table.clear()
+        self.books = {}
+        for book in library:
+            key = table.add_row(book.get("title", "")[:40], book.get("author", "")[:22],
+                                book.get("format", ""), book.get("transferStatus", ""),
+                                percent(book))
+            self.books[key] = book
+
+        table = self.query_one("#wanted", DataTable)
+        table.clear()
+        self.wanted = {}
+        for item in wishlist:
+            key = table.add_row(item.get("title", "")[:44], item.get("author", "")[:24],
+                                item.get("status", ""))
+            self.wanted[key] = item
+
+        table = self.query_one("#marks", DataTable)
+        table.clear()
+        self.marks = {}
+        for mark in highlights:
+            passage = " ".join((mark.get("text") or "").split())
+            key = table.add_row(mark.get("bookTitle", "")[:26],
+                                (mark.get("chapter") or "")[:22], passage[:44])
+            self.marks[key] = mark
+
+    @on(DataTable.RowHighlighted, "#books")
+    def book_row(self, event: DataTable.RowHighlighted) -> None:
+        book = self.books.get(event.row_key)
+        if book:
+            self.query_one("#detail", Label).update(
+                f"{book.get('title','')} — {book.get('author','')}   {size(book.get('bytes'))}"
+                f"   on the reader at {book.get('readerPath') or 'not delivered'}")
+
+    @on(DataTable.RowHighlighted, "#wanted")
+    def wanted_row(self, event: DataTable.RowHighlighted) -> None:
+        item = self.wanted.get(event.row_key)
+        if item:
+            text = " ".join((item.get("description") or "").split())
+            self.query_one("#detail", Label).update(text[:400] or item.get("title", ""))
+
+    @on(DataTable.RowHighlighted, "#marks")
+    def mark_row(self, event: DataTable.RowHighlighted) -> None:
+        mark = self.marks.get(event.row_key)
+        if mark:
+            passage = " ".join((mark.get("text") or "").split())
+            note = " ".join((mark.get("note") or "").split())
+            self.query_one("#detail", Label).update(
+                passage[:300] + (f"\n\nyour note: {note}" if note else ""))
+
+    @on(Button.Pressed, "#send")
+    def send(self) -> None:
+        url = self.query_one("#url", Input).value.strip()
+        if not url:
+            return
+        self.query_one("#detail", Label).update(f"fetching {url} …")
+        self.deliver(url)
+
+    @work(thread=True)
+    def deliver(self, url) -> None:
+        result = api("/admin/deliveries", {"url": url}, timeout=180)
+        message = result.get("error") or "sent to the reader"
+        self.call_from_thread(self.query_one("#detail", Label).update, message)
+        self.call_from_thread(self.refresh_all)
+
+    @on(Button.Pressed, "#sync")
+    def sync(self) -> None:
+        self.query_one("#detail", Label).update("syncing with the reader…")
+        self.run_sync()
+
+    @work(thread=True)
+    def run_sync(self) -> None:
+        result = api("/admin/library/sync", {}, timeout=180)
+        self.call_from_thread(self.query_one("#detail", Label).update,
+                              result.get("error") or "synced")
+        self.call_from_thread(self.refresh_all)
+
+    @on(Button.Pressed, "#backup")
+    def backup(self) -> None:
+        self.query_one("#detail", Label).update("backing the reader up…")
+        self.run_backup()
+
+    @work(thread=True)
+    def run_backup(self) -> None:
+        result = api("/admin/backups", {}, timeout=600)
+        self.call_from_thread(self.query_one("#detail", Label).update,
+                              result.get("error") or "backed up")
+        self.call_from_thread(self.refresh_all)
+
+
+if __name__ == "__main__":
+    Reading().run()
