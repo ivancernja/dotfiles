@@ -112,8 +112,6 @@ def take():
     for row in jrex("ls", "--json").get("sessions", []):
         label = row.get("label") or ""
         session_id = row["session_id"]
-        if session_id == os.environ.get("REX_SESSION"):
-            continue  # the session this agent runs in
         if label in BUILDERS:
             sessions.append({"label": label, "builder": BUILDERS[label]})
             continue
