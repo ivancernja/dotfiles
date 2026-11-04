@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Build the GrokBots session, or focus it if it is already running.
+set -e
+BIN="$HOME/rex/bin"
+icon() { printf "$1"; }
+
+sid=$(rex ls --json | jq -r '.sessions[]? | select(.label=="GrokBots") | .session_id' | head -1)
+if [ -n "$sid" ]; then
+  rex do session.select session_id="$sid" 2>/dev/null || true
+  echo "$sid"
+  exit 0
+fi
+
+created=$(rex new GrokBots --window "$(icon '\U000F06A9')  Bots" --json -- "$BIN/grokbots")
+sid=$(printf '%s' "$created" | jq -er '.session_id')
+rex do session.select session_id="$sid" 2>/dev/null || true
+echo "$sid"

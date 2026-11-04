@@ -76,6 +76,17 @@ def add_panes(session_id, anchor, panes):
             return
 
 
+def tailnet():
+    """Re-serve the API over the tailnet. `tailscale on` is runtime-only, so a
+    restarted server comes back with it off. The enrolled identity is kept, so
+    this needs no sign-in."""
+    status = rex("server", "status")
+    if "tailscale: disabled" not in status:
+        return
+    rex("server", "tailscale", "on")
+    print(f"  {G}tailnet{R} on")
+
+
 def main():
     dry = "--dry-run" in sys.argv
     only = None
@@ -91,6 +102,8 @@ def main():
 
     running = open_sessions()
     print(f"{B}Restoring Rex{R}\n")
+    if not dry:
+        tailnet()
     for session in saved.get("sessions", []):
         label = session["label"]
         if only and label != only:

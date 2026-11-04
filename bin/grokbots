@@ -1,0 +1,253 @@
+#!/Users/ivan/rex/venv/bin/python
+"""The GrokBot workforce as a chat you click: bots on the left, the conversation on the right."""
+import json
+import shutil
+import subprocess
+from datetime import datetime, timezone
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import (DataTable, Footer, Header, Input, Label, Markdown,
+                             Static)
+
+GROKBOT = shutil.which("grokbot") or "/Users/ivan/.nvm/versions/node/v24.15.0/bin/grokbot"
+HISTORY = 30
+
+
+def run_json(args, timeout=120):
+    """Returns (data, error). grokbot puts JSON on stdout and errors on stderr."""
+    try:
+        done = subprocess.run([GROKBOT, *args], capture_output=True, text=True,
+                              timeout=timeout)
+    except FileNotFoundError:
+        return {}, "grokbot is not installed on this PATH"
+    except subprocess.TimeoutExpired:
+        return {}, "grokbot timed out"
+    except Exception as exc:
+        return {}, str(exc)
+    data = {}
+    if done.stdout.strip():
+        try:
+            data = json.loads(done.stdout)
+        except ValueError:
+            pass
+    if done.returncode != 0:
+        line = (done.stderr or "").strip().splitlines()
+        return data, line[0] if line else f"exit {done.returncode}"
+    return data, ""
+
+
+def split_name(name):
+    """'Felix - Growth partner' reads better as two fields than one."""
+    parts = [p.strip() for p in str(name or "").split("·")]
+    if len(parts) >= 2:
+        return parts[0], " ".join(parts[1:])
+    return (parts[0] if parts else ""), ""
+
+
+def status_of(status):
+    status = status or {}
+    if status.get("isRunning"):
+        return "working"
+    if status.get("awaiting"):
+        return "waiting"
+    if status.get("isComposing"):
+        return "writing"
+    if status.get("isRetrying"):
+        return "retry"
+    return ""
+
+
+def clock(ms):
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000, timezone.utc).astimezone().strftime("%H:%M")
+    except Exception:
+        return ""
+
+
+def text_of(entry):
+    """The readable text of a transcript entry, or None for one we do not show."""
+    if entry.get("kind") == "user-message":
+        return "you", entry.get("content") or ""
+    if entry.get("kind") == "reply":
+        reply = entry.get("reply") or {}
+        if reply.get("type") == "text" and (reply.get("content") or "").strip():
+            return "bot", reply["content"]
+    return None
+
+
+class GrokBots(App):
+    CSS = """
+    Screen { background: #11151c; color: #c9d3df; layout: horizontal; }
+    #sidebar { width: 34; background: #0e1219; border-right: solid #262e3a; }
+    #sidebar-title { padding: 1 2 0 2; text-style: bold; }
+    #bots { height: 1fr; margin: 1 0 0 0; background: #0e1219; }
+    #bots > .datatable--header { background: #0e1219; color: #71808f; text-style: bold; }
+    #bots > .datatable--cursor { background: #26303c; }
+    #right { width: 1fr; }
+    #who { height: auto; padding: 1 2 0 2; text-style: bold; }
+    #convo { height: 1fr; padding: 0 2; background: #11151c; }
+    .from { color: #5ad1c4; text-style: bold; padding: 1 0 0 0; }
+    .from-you { color: #71808f; text-style: bold; padding: 1 0 0 0; }
+    Markdown { background: #11151c; margin: 0; padding: 0; }
+    #composer { height: auto; padding: 0 2 1 2; background: #151b23; border-top: solid #262e3a; }
+    Input { background: #1d242e; color: #c9d3df; border: none; }
+    Input:focus { border: none; background: #26303c; }
+    #note { height: auto; padding: 0 2 1 2; color: #71808f; background: #151b23; }
+    """
+    BINDINGS = [
+        ("q", "quit", "Quit"),
+        ("r", "reload", "Refresh"),
+        ("ctrl+k", "interrupt", "Interrupt"),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.bots = []
+        self.current = None
+        self.busy = False
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Vertical(id="sidebar"):
+            yield Label("Bots", id="sidebar-title")
+            yield DataTable(cursor_type="row", id="bots")
+        with Vertical(id="right"):
+            yield Label("", id="who")
+            yield VerticalScroll(id="convo")
+            with Vertical(id="composer"):
+                yield Input(placeholder="Pick a bot on the left", id="say")
+            yield Label("", id="note")
+        yield Footer()
+
+    def on_mount(self):
+        self.title = "GrokBots"
+        table = self.query_one("#bots", DataTable)
+        table.add_columns("bot", "")
+        self.load_bots()
+        self.set_interval(45, self.load_bots)
+        self.set_interval(15, self.poll)
+
+    def note(self, text):
+        self.query_one("#note", Label).update(text)
+
+    def action_reload(self):
+        self.load_bots()
+        if self.current:
+            self.load_convo(self.current)
+
+    def action_interrupt(self):
+        if self.current:
+            self.fire(["interrupt", "--agent", self.current, "--json"], "interrupted")
+
+    # ---------- bots ----------
+
+    @work(thread=True, exclusive=True, group="bots")
+    def load_bots(self):
+        data, err = run_json(["team", "--json"])
+        bots = []
+        for m in data.get("members", []) or []:
+            agent = m.get("agent", {}) or {}
+            who, role = split_name(agent.get("name"))
+            bots.append({
+                "id": agent.get("agentId"),
+                "who": who,
+                "role": role,
+                "name": agent.get("name") or who,
+                "status": status_of(m.get("status")),
+            })
+        self.call_from_thread(self.show_bots, bots, err)
+
+    def show_bots(self, bots, err):
+        table = self.query_one("#bots", DataTable)
+        keep = table.cursor_row
+        self.bots = bots
+        table.clear()
+        for b in bots:
+            table.add_row(b["who"], b["status"])
+        if err:
+            self.note(err)
+        if bots and self.current is None:
+            table.move_cursor(row=0)
+            self.pick(0)
+        elif bots and 0 <= keep < len(bots):
+            table.move_cursor(row=keep)
+
+    @on(DataTable.RowHighlighted, "#bots")
+    def on_pick(self, event: DataTable.RowHighlighted):
+        self.pick(event.cursor_row)
+
+    def pick(self, index):
+        if not (0 <= index < len(self.bots)):
+            return
+        bot = self.bots[index]
+        if bot["id"] == self.current:
+            return
+        self.current = bot["id"]
+        label = bot["name"] if not bot["role"] else f"{bot['who']}   {bot['role']}"
+        self.query_one("#who", Label).update(label)
+        self.query_one("#say", Input).placeholder = f"Message {bot['who']}"
+        self.query_one("#convo", VerticalScroll).remove_children()
+        self.note("loading the conversation")
+        self.load_convo(bot["id"])
+
+    # ---------- conversation ----------
+
+    @work(thread=True, exclusive=True, group="convo")
+    def load_convo(self, agent_id):
+        data, err = run_json(["tail", "-n", str(HISTORY), "--agent", agent_id, "--json"])
+        msgs = []
+        for e in data.get("entries", []) or []:
+            got = text_of(e)
+            if got:
+                msgs.append((got[0], got[1], clock(e.get("timestampMs"))))
+        self.call_from_thread(self.show_convo, agent_id, msgs, err)
+
+    def show_convo(self, agent_id, msgs, err):
+        if agent_id != self.current:
+            return
+        convo = self.query_one("#convo", VerticalScroll)
+        convo.remove_children()
+        who = next((b["who"] for b in self.bots if b["id"] == agent_id), "bot")
+        for sender, body, when in msgs:
+            name = "You" if sender == "you" else who
+            css = "from-you" if sender == "you" else "from"
+            convo.mount(Static(f"{name}   {when}", classes=css))
+            convo.mount(Markdown(body))
+        convo.scroll_end(animate=False)
+        self.note(err if err else f"refreshed {datetime.now().strftime('%H:%M')}")
+
+    def poll(self):
+        """Keep the open conversation current without the user asking."""
+        if self.current and not self.busy:
+            self.load_convo(self.current)
+
+    # ---------- sending ----------
+
+    @on(Input.Submitted, "#say")
+    def on_say(self, event: Input.Submitted):
+        text = (event.value or "").strip()
+        if not text or not self.current:
+            return
+        self.query_one("#say", Input).value = ""
+        convo = self.query_one("#convo", VerticalScroll)
+        convo.mount(Static(f"You   {datetime.now().strftime('%H:%M')}", classes="from-you"))
+        convo.mount(Markdown(text))
+        convo.scroll_end(animate=False)
+        self.fire(["send", text, "--agent", self.current, "--json"], "sent")
+
+    @work(thread=True, group="fire")
+    def fire(self, args, done_word):
+        self.busy = True
+        self.call_from_thread(self.note, f"{done_word[:-1]}ing" if done_word.endswith("t") else "working")
+        data, err = run_json(args, timeout=180)
+        job = data.get("jobId") or data.get("job") or ""
+        self.busy = False
+        self.call_from_thread(self.note, err if err else f"{done_word}{' ' + job if job else ''}")
+        if self.current:
+            self.load_convo(self.current)
+
+
+if __name__ == "__main__":
+    GrokBots().run()
