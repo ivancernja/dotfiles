@@ -5,12 +5,7 @@
   <key>Label</key><string>dev.rex.server</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/ivan/rexsrv/Rex Server.rex/Contents/MacOS/rex</string>
-    <string>server</string>
-    <string>run</string>
-    <string>--tailscale</string>
-    <string>--tailscale-hostname</string>
-    <string>mini</string>
+    <string>/Users/ivan/rex/bin/rex-serve</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

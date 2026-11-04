@@ -15,6 +15,7 @@ import sys
 SNAP = os.path.expanduser("~/.config/rex-comms/sessions.json")
 HOME = os.path.expanduser("~")
 SHELLS = {"login", "zsh", "bash", "sh", "fish", "nu", ""}
+AGENTS = {"claude": "claude --continue", "codex": "codex resume --last"}
 B, D, G, Y, R = "\033[1m", "\033[2m", "\033[32m", "\033[33m", "\033[0m"
 
 
@@ -35,6 +36,17 @@ def expand(path):
     return os.path.expanduser(path or "~")
 
 
+def resume_agent(session_id, block_id, pane):
+    """A pane that had Claude or Codex in it comes back with that work picked up.
+
+    The command is typed into the shell rather than run as the pane's program, so the
+    pane is still a shell when you quit the agent, as it was before the reboot."""
+    command = AGENTS.get(pane.get("agent", ""))
+    if not command or not block_id:
+        return
+    rex("send", "-s", session_id, "-b", block_id, command + "\n")
+
+
 def make_session(session, dry):
     label = session["label"]
     windows = session.get("windows", [])
@@ -53,6 +65,7 @@ def make_session(session, dry):
         print(f"  {Y}could not create {label}{R}")
         return
     anchor = json.loads(created)["initial_windows"][0]["block_ids"][0]
+    resume_agent(session_id, anchor, first_pane)
     add_panes(session_id, anchor, first_window["panes"][1:])
     for window in windows[1:]:
         panes = window["panes"]
@@ -62,6 +75,7 @@ def make_session(session, dry):
             block = json.loads(out)["block_ids"][0]
         except Exception:
             continue
+        resume_agent(session_id, block, panes[0])
         add_panes(session_id, block, panes[1:])
     print(f"  {G}opened{R} {B}{label}{R}  {D}{len(windows)} tabs{R}")
 
@@ -74,6 +88,7 @@ def add_panes(session_id, anchor, panes):
             anchor = json.loads(out)["block_ids"][0]
         except Exception:
             return
+        resume_agent(session_id, anchor, pane)
 
 
 def tailnet():

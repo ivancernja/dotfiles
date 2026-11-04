@@ -1,0 +1,27 @@
+#!/bin/sh
+# Run the Rex server on a machine with no screen, and put the Home session back.
+#
+# launchd runs this instead of the rex binary directly, because two things have
+# to happen on every start and a launch agent only knows how to run one program.
+#
+# Rex's own --restore brings back sessions, windows and panes, but a pane comes
+# back as a bare shell: a process cannot be resurrected. So restore is off here
+# and `comms` rebuilds Home from scratch, which gives the real panes back rather
+# than empty shells where they used to be.
+
+REX="$HOME/rexsrv/Rex Server.rex/Contents/MacOS/rex"
+[ -x "$REX" ] || REX="$(command -v rex)"
+
+(
+    n=0
+    while [ "$n" -lt 90 ]; do
+        if "$REX" whoami >/dev/null 2>&1; then
+            "$HOME/rex/bin/comms" >/dev/null 2>&1
+            exit 0
+        fi
+        sleep 1
+        n=$((n + 1))
+    done
+) &
+
+exec "$REX" server run --restore=false --tailscale --tailscale-hostname mini
