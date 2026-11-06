@@ -12,6 +12,11 @@ zshrc|$HOME/.zshrc
 hammerspoon/init.lua|$HOME/.hammerspoon/init.lua
 config/rex/init.lua|$HOME/.config/rex/init.lua
 config/rex-comms/workspaces.json|$HOME/.config/rex-comms/workspaces.json
+config/sketchybar/sketchybarrc|$HOME/.config/sketchybar/sketchybarrc
+config/sketchybar/plugins/space.sh|$HOME/.config/sketchybar/plugins/space.sh
+config/sketchybar/plugins/front_app.sh|$HOME/.config/sketchybar/plugins/front_app.sh
+config/sketchybar/plugins/clock.sh|$HOME/.config/sketchybar/plugins/clock.sh
+config/sketchybar/plugins/battery.sh|$HOME/.config/sketchybar/plugins/battery.sh
 "
 
 case "${1:-pull}" in

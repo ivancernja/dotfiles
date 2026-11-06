@@ -1,0 +1,72 @@
+#!/bin/bash
+# SketchyBar, standing in for the macOS menu bar.
+# Workspaces on the left, front app in the middle, clock and battery on the right.
+# Colours follow the Rex palette already used in ~/.zshrc and the agenda pane.
+
+PLUGINS="$HOME/.config/sketchybar/plugins"
+
+BAR_BG=0xff11151c
+FG=0xffc9d3df
+DIM=0xff71808f
+ACCENT=0xffb696f7
+TEAL=0xff5ad1c4
+FONT="JetBrainsMono Nerd Font"
+
+sketchybar --bar height=32 \
+                 position=top \
+                 blur_radius=20 \
+                 color=$BAR_BG \
+                 padding_left=8 \
+                 padding_right=8 \
+                 corner_radius=0 \
+                 sticky=on
+
+sketchybar --default updates=when_shown \
+                     icon.font="$FONT:Bold:13.0" \
+                     icon.color=$FG \
+                     label.font="$FONT:Medium:12.0" \
+                     label.color=$FG \
+                     padding_left=4 \
+                     padding_right=4 \
+                     background.corner_radius=6 \
+                     background.height=22
+
+# One item per workspace. associated_space makes SketchyBar set $SELECTED itself
+# when that desktop becomes active, so nothing has to poll Mission Control.
+WORKSPACES=("1:Dev" "2:Web" "3:Write" "4:Bots" "5:Chat")
+for entry in "${WORKSPACES[@]}"; do
+  sid="${entry%%:*}"
+  name="${entry#*:}"
+  sketchybar --add space space.$sid left \
+             --set space.$sid associated_space=$sid \
+                              icon="$sid" \
+                              icon.color=$DIM \
+                              label="$name" \
+                              label.color=$DIM \
+                              label.padding_right=10 \
+                              icon.padding_left=10 \
+                              background.color=0x00000000 \
+                              background.drawing=off \
+                              script="$PLUGINS/space.sh" \
+             --subscribe space.$sid mouse.clicked
+done
+
+sketchybar --add item front_app center \
+           --set front_app icon.drawing=off \
+                           label.font="$FONT:Bold:12.0" \
+                           label.color=$TEAL \
+                           script="$PLUGINS/front_app.sh" \
+           --subscribe front_app front_app_switched
+
+sketchybar --add item clock right \
+           --set clock icon="󰥔" \
+                       icon.color=$ACCENT \
+                       update_freq=10 \
+                       script="$PLUGINS/clock.sh"
+
+sketchybar --add item battery right \
+           --set battery update_freq=120 \
+                         script="$PLUGINS/battery.sh" \
+           --subscribe battery power_source_change
+
+sketchybar --update
