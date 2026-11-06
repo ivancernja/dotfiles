@@ -21,13 +21,13 @@ sketchybar --bar height=32 \
                  corner_radius=0 \
                  sticky=on
 
-sketchybar --default updates=when_shown \
+sketchybar --default updates=on \
                      icon.font="$FONT:Bold:13.0" \
                      icon.color=$FG \
                      label.font="$FONT:Medium:12.0" \
                      label.color=$FG \
-                     padding_left=4 \
-                     padding_right=4 \
+                     padding_left=3 \
+                     padding_right=3 \
                      background.corner_radius=6 \
                      background.height=22
 
@@ -43,10 +43,13 @@ for entry in "${WORKSPACES[@]}"; do
                               icon.color=$DIM \
                               label="$name" \
                               label.color=$DIM \
-                              label.padding_right=10 \
-                              icon.padding_left=10 \
+                              icon.padding_left=9 \
+                              icon.padding_right=5 \
+                              label.padding_left=0 \
+                              label.padding_right=9 \
                               background.color=0x00000000 \
                               background.drawing=off \
+                              ignore_association=on \
                               script="$PLUGINS/space.sh" \
              --subscribe space.$sid mouse.clicked
 done
@@ -61,11 +64,17 @@ sketchybar --add item front_app center \
 sketchybar --add item clock right \
            --set clock icon="󰥔" \
                        icon.color=$ACCENT \
+                       icon.padding_left=10 \
+                       icon.padding_right=5 \
+                       label.padding_right=6 \
                        update_freq=10 \
                        script="$PLUGINS/clock.sh"
 
 sketchybar --add item battery right \
            --set battery update_freq=120 \
+                         icon.padding_left=10 \
+                         icon.padding_right=5 \
+                         label.padding_right=4 \
                          script="$PLUGINS/battery.sh" \
            --subscribe battery power_source_change
 

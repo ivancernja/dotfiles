@@ -1,0 +1,25 @@
+#!/bin/sh
+# Bring the machine back after a reboot.
+#
+# Rex sessions first, from the rolling "last" profile rather than "default", so you get
+# what was actually open rather than what was last saved deliberately. Then the workspace
+# apps, which land on their own desktops through the app-bindings in com.apple.spaces and
+# size themselves through the Hammerspoon watcher.
+#
+# Run by the dev.rex.boot launch agent at login. Safe to run by hand.
+set -e
+LOG="${HOME}/.config/rex-comms/login-restore.log"
+exec >>"$LOG" 2>&1
+echo "--- $(date '+%Y-%m-%d %H:%M:%S') login restore ---"
+
+# The Rex server needs a moment after login before it will accept connections.
+i=0
+while [ $i -lt 30 ]; do
+  rex ls >/dev/null 2>&1 && break
+  i=$((i + 1))
+  sleep 2
+done
+
+"$HOME/rex/bin/boot" last || echo "boot failed"
+"$HOME/rex/bin/workspace" all || echo "workspace failed"
+echo "done"
