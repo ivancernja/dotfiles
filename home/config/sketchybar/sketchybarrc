@@ -74,16 +74,9 @@ sketchybar --add item clock right \
                        update_freq=10 \
                        script="$PLUGINS/clock.sh"
 
-sketchybar --add item battery right \
-           --set battery update_freq=120 \
-                         icon.padding_left=10 \
-                         icon.padding_right=5 \
-                         label.padding_right=4 \
-                         script="$PLUGINS/battery.sh" \
-           --subscribe battery power_source_change
-
-# Each item added to the right stacks further left than the last, so this sits to the
-# left of the battery. Hiragino Sans because the Nerd Font has no CJK glyphs.
+# Items added to the right stack leftwards, so adding this before the battery puts it
+# to the battery's right, between the battery and the clock. Hiragino Sans because the
+# Nerd Font carries no CJK glyphs.
 sketchybar --add item kanji right \
            --set kanji icon.drawing=off \
                        label="存在する" \
@@ -91,5 +84,13 @@ sketchybar --add item kanji right \
                        label.color=0xffff7ed1 \
                        label.padding_left=10 \
                        label.padding_right=6
+
+sketchybar --add item battery right \
+           --set battery update_freq=120 \
+                         icon.padding_left=10 \
+                         icon.padding_right=5 \
+                         label.padding_right=4 \
+                         script="$PLUGINS/battery.sh" \
+           --subscribe battery power_source_change
 
 sketchybar --update
