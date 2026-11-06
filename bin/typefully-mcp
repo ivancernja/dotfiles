@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""Typefully over MCP, so Claude and Codex can both read and write the queue.
+
+Speaks JSON-RPC over stdio. Stdlib only, so it runs under any python3 without a venv.
+
+The API key lives in the login keychain, not in the MCP config files, because those are
+plaintext and are read by two different clients:
+
+  security add-generic-password -s typefully -a api -w 'YOUR_KEY'
+
+TYPEFULLY_API_KEY overrides it, which is what the tests use.
+
+Typefully API v2 reference: https://typefully.com/docs/api
+"""
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+API = "https://api.typefully.com/v2"
+VERSION = "0.1.0"
+PLATFORMS = ["x", "linkedin", "mastodon", "threads", "bluesky", "substack"]
+SETUP = (
+    "No Typefully API key found. Create one at typefully.com under Settings then API, "
+    "and store it with:\n\n"
+    "  security add-generic-password -s typefully -a api -w 'YOUR_KEY'\n\n"
+    "Then restart this MCP server."
+)
+
+
+class Problem(Exception):
+    """Something the caller should read, rather than a stack trace."""
+
+
+def api_key():
+    key = os.environ.get("TYPEFULLY_API_KEY", "").strip()
+    if key:
+        return key
+    found = subprocess.run(
+        ["security", "find-generic-password", "-s", "typefully", "-a", "api", "-w"],
+        capture_output=True, text=True)
+    key = found.stdout.strip()
+    if not key:
+        raise Problem(SETUP)
+    return key
+
+
+def call(method, path, params=None, body=None):
+    url = f"{API}{path}"
+    if params:
+        url += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(url, data=data, method=method, headers={
+        "Authorization": f"Bearer {api_key()}",
+        "Content-Type": "application/json",
+        "User-Agent": "rex-typefully-mcp/" + VERSION,
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read().decode()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode()[:600]
+        if exc.code in (401, 403):
+            raise Problem(f"Typefully rejected the key ({exc.code}). {detail}\n\n{SETUP}")
+        raise Problem(f"Typefully returned {exc.code}: {detail}")
+    except urllib.error.URLError as exc:
+        raise Problem(f"Could not reach Typefully: {exc.reason}")
+    return json.loads(raw) if raw.strip() else {}
+
+
+_sets = []
+
+
+def social_sets():
+    global _sets
+    if not _sets:
+        _sets = call("GET", "/social-sets").get("results", [])
+    if not _sets:
+        raise Problem("This key can see no social sets.")
+    return _sets
+
+
+def resolve_set(name=None):
+    """Pick the account to act on. With one account, the argument is optional."""
+    found = social_sets()
+    if not name:
+        if len(found) > 1:
+            listed = ", ".join(f"{s.get('name')} (@{s.get('username')})" for s in found)
+            raise Problem(f"You have several accounts, so name one: {listed}")
+        return found[0]["id"]
+    wanted = str(name).lower().lstrip("@")
+    for item in found:
+        if wanted in (str(item.get("id")).lower(), (item.get("name") or "").lower(),
+                      (item.get("username") or "").lower()):
+            return item["id"]
+    listed = ", ".join(f"{s.get('name')} (@{s.get('username')})" for s in found)
+    raise Problem(f"No account matching {name!r}. You have: {listed}")
+
+
+def tool_social_sets():
+    rows = [{"id": s.get("id"), "name": s.get("name"), "username": s.get("username")}
+            for s in social_sets()]
+    return {"accounts": rows}
+
+
+def tool_list_drafts(status=None, account=None, limit=20):
+    data = call("GET", f"/social-sets/{resolve_set(account)}/drafts",
+                params={"status": status, "limit": limit})
+    rows = []
+    for item in data.get("results", []):
+        published = [p for p in PLATFORMS if item.get(f"{p}_post_enabled")]
+        rows.append({
+            "id": item.get("id"),
+            "title": item.get("draft_title") or "",
+            "preview": (item.get("preview") or "")[:280],
+            "status": item.get("status"),
+            "scheduled_for": item.get("scheduled_date"),
+            "published_at": item.get("published_at"),
+            "platforms": published,
+            "url": item.get("share_url") or item.get("private_url"),
+        })
+    return {"count": data.get("count", len(rows)), "drafts": rows}
+
+
+def tool_get_queue(account=None):
+    data = call("GET", f"/social-sets/{resolve_set(account)}/queue")
+    return {"queue": data}
+
+
+def tool_create_draft(text=None, posts=None, platforms=None, publish_at=None,
+                      plan_at=None, title=None, tags=None, account=None, share=False):
+    if publish_at and plan_at:
+        raise Problem("Give publish_at or plan_at, not both.")
+    thread = posts if posts else ([text] if text else [])
+    thread = [t for t in thread if str(t).strip()]
+    if not thread:
+        raise Problem("Nothing to post: pass text, or posts for a thread.")
+    targets = platforms or ["x"]
+    unknown = [p for p in targets if p not in PLATFORMS]
+    if unknown:
+        raise Problem(f"Unknown platform(s) {unknown}. Known: {', '.join(PLATFORMS)}")
+
+    body = {"platforms": {p: {"enabled": True, "posts": [{"text": t} for t in thread]}
+                          for p in targets}}
+    if publish_at:
+        body["publish_at"] = publish_at
+    if plan_at:
+        body["plan_at"] = plan_at
+    if title:
+        body["draft_title"] = title
+    if tags:
+        body["tags"] = tags
+    if share:
+        body["share"] = True
+
+    created = call("POST", f"/social-sets/{resolve_set(account)}/drafts", body=body)
+    return {"id": created.get("id"), "status": created.get("status"),
+            "scheduled_for": created.get("scheduled_date"),
+            "url": created.get("share_url") or created.get("private_url"),
+            "posts": len(thread), "platforms": targets}
+
+
+def tool_delete_draft(draft_id, account=None):
+    call("DELETE", f"/social-sets/{resolve_set(account)}/drafts/{draft_id}")
+    return {"deleted": draft_id}
+
+
+ACCOUNT = {"type": "string",
+           "description": "Account name, @username or id. Optional with one account."}
+
+TOOLS = [
+    {
+        "name": "typefully_list_drafts",
+        "description": "List Typefully drafts. Use status='scheduled' to answer "
+                       "'what is scheduled', or 'published' for what already went out.",
+        "inputSchema": {"type": "object", "properties": {
+            "status": {"type": "string",
+                       "enum": ["draft", "scheduled", "planned", "publishing",
+                                "published", "error"],
+                       "description": "Filter by status. Omit for all."},
+            "limit": {"type": "integer", "description": "How many to return (default 20)."},
+            "account": ACCOUNT}},
+        "handler": tool_list_drafts,
+    },
+    {
+        "name": "typefully_queue",
+        "description": "Show the posting queue: the time slots and which drafts fill them.",
+        "inputSchema": {"type": "object", "properties": {"account": ACCOUNT}},
+        "handler": tool_get_queue,
+    },
+    {
+        "name": "typefully_create_draft",
+        "description": "Write a Typefully draft, optionally scheduling it. Omit publish_at "
+                       "and plan_at to leave it as an unscheduled draft.",
+        "inputSchema": {"type": "object", "properties": {
+            "text": {"type": "string", "description": "A single post."},
+            "posts": {"type": "array", "items": {"type": "string"},
+                      "description": "A thread, one string per post. Use instead of text."},
+            "platforms": {"type": "array", "items": {"type": "string", "enum": PLATFORMS},
+                          "description": "Where to post. Defaults to x."},
+            "publish_at": {"type": "string",
+                           "description": "'now', 'next-free-slot', or an ISO 8601 "
+                                          "datetime with a timezone. Publishes."},
+            "plan_at": {"type": "string",
+                        "description": "'next-free-slot' or an ISO 8601 datetime. Dates "
+                                       "the draft without auto-publishing."},
+            "title": {"type": "string", "description": "Internal title, never posted."},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "share": {"type": "boolean", "description": "Create a public share link."},
+            "account": ACCOUNT}},
+        "handler": tool_create_draft,
+    },
+    {
+        "name": "typefully_delete_draft",
+        "description": "Delete a draft by id. Irreversible, so confirm with the user first.",
+        "inputSchema": {"type": "object", "properties": {
+            "draft_id": {"type": "string", "description": "The draft's id."},
+            "account": ACCOUNT},
+            "required": ["draft_id"]},
+        "handler": tool_delete_draft,
+    },
+    {
+        "name": "typefully_accounts",
+        "description": "List the Typefully accounts (social sets) this key can reach.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": tool_social_sets,
+    },
+]
+BY_NAME = {t["name"]: t for t in TOOLS}
+
+
+def advertised():
+    return [{k: t[k] for k in ("name", "description", "inputSchema")} for t in TOOLS]
+
+
+def handle(message):
+    method = message.get("method")
+    mid = message.get("id")
+
+    if method == "initialize":
+        asked = (message.get("params") or {}).get("protocolVersion")
+        return {"protocolVersion": asked or "2025-06-18",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "typefully", "version": VERSION}}
+    if method == "tools/list":
+        return {"tools": advertised()}
+    if method == "tools/call":
+        params = message.get("params") or {}
+        name = params.get("name")
+        if name not in BY_NAME:
+            raise Problem(f"No such tool: {name}")
+        args = params.get("arguments") or {}
+        result = BY_NAME[name]["handler"](**args)
+        return {"content": [{"type": "text", "text": json.dumps(result, indent=2)}],
+                "structuredContent": result}
+    if method == "ping":
+        return {}
+    raise Problem(f"Unsupported method: {method}")
+
+
+def main():
+    out = sys.stdout
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        # Notifications carry no id and must never be answered.
+        if "id" not in message:
+            continue
+        try:
+            reply = {"jsonrpc": "2.0", "id": message["id"], "result": handle(message)}
+        except Problem as exc:
+            # A tool call reports trouble in its result, so the model can read and act on
+            # it. Anything else is a protocol-level error.
+            if message.get("method") == "tools/call":
+                reply = {"jsonrpc": "2.0", "id": message["id"],
+                         "result": {"content": [{"type": "text", "text": str(exc)}],
+                                    "isError": True}}
+            else:
+                reply = {"jsonrpc": "2.0", "id": message["id"],
+                         "error": {"code": -32603, "message": str(exc)}}
+        except TypeError as exc:
+            reply = {"jsonrpc": "2.0", "id": message["id"],
+                     "result": {"content": [{"type": "text",
+                                             "text": f"Bad arguments: {exc}"}],
+                                "isError": True}}
+        out.write(json.dumps(reply) + "\n")
+        out.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

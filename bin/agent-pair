@@ -1,0 +1,228 @@
+#!/Users/ivan/rex/venv/bin/python
+"""Keep a shell pane beside whichever pane is running a coding agent.
+
+The companion is a plain shell sitting in the agent's folder, not an editor, so you can
+navigate and open nvim yourself when you want it.
+
+  agent-pair open [CWD]   open or re-point the editor next to $REX_BLOCK
+  agent-pair close        close the editor belonging to $REX_BLOCK
+  agent-pair scan         pair every pane already running an agent, and reap dead pairs
+  agent-pair status       show the current pairs
+
+The zsh hooks in ~/rex/env.sh call open and close. scan exists because the hooks only fire
+for agents started after they were installed, and for agents started by typing rather than
+as a pane's own command.
+"""
+import json
+import os
+import subprocess
+import sys
+
+HOME = os.path.expanduser("~")
+STATE = os.path.join(HOME, ".config/rex-comms/agent-pairs.json")
+AGENTS = {"claude", "codex"}
+RATIO = "50"
+
+
+def rex(*args):
+    done = subprocess.run(["rex", *args], capture_output=True, text=True)
+    return done.stdout.strip(), done.returncode
+
+
+def jrex(*args):
+    out, code = rex(*args)
+    if code != 0:
+        return {}
+    try:
+        return json.loads(out)
+    except Exception:
+        return {}
+
+
+def load():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save(pairs):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    with open(STATE, "w") as f:
+        json.dump(pairs, f, indent=2)
+
+
+def alive(session_id, block_id):
+    # inspect takes the block positionally; -b is not a flag it accepts.
+    _, code = rex("block", "inspect", block_id, "-s", session_id, "--json")
+    return code == 0
+
+
+def process_tree():
+    """parent -> children, and pid -> command name, in one pass."""
+    rows = subprocess.run(["/bin/ps", "-axo", "pid,ppid,comm"],
+                          capture_output=True, text=True).stdout
+    children, names = {}, {}
+    for line in rows.splitlines()[1:]:
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[1].isdigit() and parts[0].isdigit():
+            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+            names[int(parts[0])] = os.path.basename(parts[2].strip())
+    return children, names
+
+
+def agent_under(pid, children, names):
+    """The coding agent running beneath a pane's shell, and its pid."""
+    if not pid:
+        return "", None
+    seen, frontier = set(), [int(pid)]
+    while frontier:
+        current = frontier.pop(0)
+        for kid in children.get(current, []):
+            if kid in seen:
+                continue
+            seen.add(kid)
+            if names.get(kid, "") in AGENTS:
+                return names[kid], kid
+            frontier.append(kid)
+    return "", None
+
+
+def cwd_of(pid):
+    """The folder a process is sitting in.
+
+    A pane running an agent never reports its directory to the terminal, because the
+    shell only emits that at a prompt and the agent holds the foreground. The agent
+    process itself is in the right folder, so ask the process table instead."""
+    if not pid:
+        return ""
+    out = subprocess.run(["/usr/sbin/lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                         capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        if line.startswith("n/"):
+            return line[1:]
+    return ""
+
+
+def open_editor(session_id, block_id, cwd):
+    pairs = load()
+    entry = pairs.get(block_id)
+
+    if entry and alive(session_id, entry["editor"]):
+        # Follow: the agent moved to another folder, so cd the shell that is already
+        # open rather than stacking a second one.
+        if entry.get("cwd") != cwd:
+            rex("block", "send", "-s", session_id, "-b", entry["editor"],
+                "cd " + cwd + "\n")
+            entry["cwd"] = cwd
+            pairs[block_id] = entry
+            save(pairs)
+        return 0
+
+    # No command, so the pane is a login shell. The label is the folder name, which is
+    # more use in the tab bar than a generic word.
+    created = jrex("split", "-s", session_id, "-b", block_id, "--split=right",
+                   "--ratio", RATIO, "-c", cwd, "--focus=false",
+                   "--label", os.path.basename(cwd.rstrip("/")) or "~", "--json")
+    editor = (created.get("block_ids") or [None])[0]
+    if not editor:
+        return 1
+    pairs[block_id] = {"editor": editor, "session": session_id, "cwd": cwd}
+    save(pairs)
+    return 0
+
+
+def close_editor(block_id):
+    pairs = load()
+    entry = pairs.pop(block_id, None)
+    if not entry:
+        return 0
+    # close takes blocks positionally, as inspect does; -b is silently not a flag here.
+    rex("block", "close", entry["editor"], "-s", entry["session"])
+    save(pairs)
+    return 0
+
+
+def blocks_of_session(session_id):
+    view = jrex("session", "inspect", session_id, "--json")
+    found = []
+    for window in view.get("windows", []):
+        for layer in window.get("layers", []):
+            for block in layer.get("blocks", []):
+                found.append(block["block_id"])
+    return found
+
+
+def scan():
+    pairs = load()
+    children, names = process_tree()
+    editors = {v["editor"] for v in pairs.values()}
+    opened = closed = 0
+
+    # Reap pairs whose agent pane or editor pane is gone.
+    for agent_block in list(pairs):
+        entry = pairs[agent_block]
+        if not alive(entry["session"], agent_block):
+            rex("block", "close", entry["editor"], "-s", entry["session"])
+            pairs.pop(agent_block)
+            closed += 1
+        elif not alive(entry["session"], entry["editor"]):
+            pairs.pop(agent_block)
+    save(pairs)
+
+    for row in jrex("ls", "--json").get("sessions", []):
+        session_id = row["session_id"]
+        for block_id in blocks_of_session(session_id):
+            pairs = load()
+            # Recomputed every time, so editors created earlier in this same scan are
+            # never themselves treated as agent panes.
+            editors = {v["editor"] for v in pairs.values()}
+            if block_id in pairs or block_id in editors:
+                continue
+            info = jrex("block", "call", "-s", session_id, "-b", block_id, "process")
+            child = info.get("child") or {}
+            agent, agent_pid = agent_under(child.get("pid"), children, names)
+            if not agent:
+                continue
+            cwd = cwd_of(agent_pid) or child.get("cwd") or HOME
+            if open_editor(session_id, block_id, cwd) == 0:
+                opened += 1
+    print(f"paired {opened}, reaped {closed}")
+    return 0
+
+
+def status():
+    pairs = load()
+    if not pairs:
+        print("no editor panes paired")
+        return 0
+    for agent_block, entry in pairs.items():
+        live = "ok" if alive(entry["session"], entry["editor"]) else "editor gone"
+        print(f"  {agent_block[-12:]} -> {entry['editor'][-12:]}  {entry['cwd']}  {live}")
+    return 0
+
+
+def main():
+    action = sys.argv[1] if len(sys.argv) > 1 else "status"
+    session_id = os.environ.get("REX_SESSION", "")
+    block_id = os.environ.get("REX_BLOCK", "")
+
+    if action == "open":
+        cwd = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
+        if not (session_id and block_id):
+            print("open needs REX_SESSION and REX_BLOCK; run it inside a Rex pane")
+            return 1
+        return open_editor(session_id, block_id, cwd)
+    if action == "close":
+        return close_editor(block_id) if block_id else 0
+    if action == "scan":
+        return scan()
+    if action == "status":
+        return status()
+    print(__doc__)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

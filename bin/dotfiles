@@ -1,0 +1,35 @@
+#!/bin/sh
+# Copy the machine's config into the repo, or back out again.
+#
+#   dotfiles pull    bring this machine's files into ~/rex/home  (then commit)
+#   dotfiles push    write ~/rex/home back onto this machine
+#
+# These are snapshots, not symlinks, so nothing breaks if the repo is missing.
+set -e
+REPO="$HOME/rex/home"
+pairs="
+zshrc|$HOME/.zshrc
+hammerspoon/init.lua|$HOME/.hammerspoon/init.lua
+config/rex/init.lua|$HOME/.config/rex/init.lua
+config/rex-comms/workspaces.json|$HOME/.config/rex-comms/workspaces.json
+"
+
+case "${1:-pull}" in
+  pull)
+    echo "$pairs" | while IFS='|' read -r rel live; do
+      [ -n "$rel" ] || continue
+      [ -f "$live" ] || { echo "  missing  $live"; continue; }
+      mkdir -p "$REPO/$(dirname "$rel")"
+      cp "$live" "$REPO/$rel" && echo "  pulled   $rel"
+    done
+    ;;
+  push)
+    echo "$pairs" | while IFS='|' read -r rel live; do
+      [ -n "$rel" ] || continue
+      [ -f "$REPO/$rel" ] || continue
+      mkdir -p "$(dirname "$live")"
+      cp "$REPO/$rel" "$live" && echo "  pushed   $rel"
+    done
+    ;;
+  *) echo "usage: dotfiles [pull|push]"; exit 1 ;;
+esac

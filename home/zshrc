@@ -1,0 +1,88 @@
+export PATH="$HOME/.local/bin:$PATH"
+export EDITOR="nvim"
+export VISUAL="nvim"
+export FZF_DEFAULT_OPTS="--border=rounded --info=inline --pointer=▶ --marker=◆ \
+--color=bg:#272a38,bg+:#393c4a,fg:#f7f7ee,fg+:#fdfdfa \
+--color=hl:#ff7ed1,hl+:#fc97d8,spinner:#90ecf6,header:#b696f7 \
+--color=info:#a4a6a7,pointer:#b696f7,marker:#4df08a,prompt:#b696f7 \
+--color=border:#474a56,label:#a4a6a7"
+
+# pnpm
+export PNPM_HOME="$HOME/Library/pnpm"
+case ":$PATH:" in
+  *":$PNPM_HOME/bin:"*) ;;
+  *) export PATH="$PNPM_HOME/bin:$PATH" ;;
+esac
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && source "$NVM_DIR/bash_completion"
+
+# Encore v2 (Rust CLI) dev build from ~/v2-encore
+alias encore2='ENCORE_DEVDASH_LISTEN_ADDR=127.0.0.1:19400 $HOME/v2-encore/target/debug/encore'
+alias encore2-rebuild='(cd ~/v2-encore && cargo build -p encore-cli) && pkill -f "v2-encore/target/debug/encore daemon"'
+
+# Comfortable interactive defaults.
+setopt AUTO_CD INTERACTIVE_COMMENTS HIST_IGNORE_DUPS SHARE_HISTORY
+HISTFILE="$HOME/.zsh_history"
+HISTSIZE=1000000
+SAVEHIST=1000000
+bindkey -e
+autoload -Uz compinit && compinit
+
+# Modern command-line tools with familiar names.
+alias ls='eza --icons=always --group-directories-first'
+alias l='eza --icons=always --group-directories-first'
+alias ll='eza -la --icons=always --git --group-directories-first'
+alias tree='eza --tree --icons=always --group-directories-first'
+alias cat='bat --paging=never'
+alias view='bat --paging=always'
+alias grep='rg'
+alias find='fd'
+alias ps='procs'
+alias du='dust'
+alias df='duf'
+alias top='btop'
+alias nano='hx'
+alias v='nvim'
+alias vi='nvim'
+alias vim='nvim'
+alias lg='lazygit'
+alias cloc='tokei'
+alias watch='watchexec'
+alias json='jless'
+alias md='glow'
+alias todo='linear-todo'
+
+mkcd() { mkdir -p -- "$1" && cd -- "$1"; }
+
+# Run Yazi and leave zsh in the directory selected on exit.
+y() {
+  local cwd_file
+  cwd_file="$(mktemp -t yazi-cwd.XXXXXX)"
+  yazi "$@" --cwd-file="$cwd_file"
+  if [[ -s "$cwd_file" ]]; then
+    local target
+    target="$(<"$cwd_file")"
+    [[ -n "$target" && "$target" != "$PWD" ]] && cd -- "$target"
+  fi
+  command rm -f -- "$cwd_file"
+}
+
+command -v direnv >/dev/null && eval "$(direnv hook zsh)"
+command -v zoxide >/dev/null && eval "$(zoxide init zsh)"
+command -v atuin >/dev/null && eval "$(atuin init zsh)"
+command -v starship >/dev/null && eval "$(starship init zsh)"
+command -v fzf >/dev/null && source <(fzf --zsh)
+command -v carapace >/dev/null && source <(carapace _carapace zsh)
+
+# These must load last so generated widgets receive highlighting/suggestions.
+[[ -r /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && \
+  source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+[[ -r /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] && \
+  source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+
+if [[ -o interactive ]]; then
+  fastfetch
+fi
+source "$HOME/rex/env.sh"

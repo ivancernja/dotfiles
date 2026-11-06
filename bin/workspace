@@ -1,0 +1,110 @@
+#!/Users/ivan/rex/venv/bin/python
+"""Open the apps that belong to a workspace.
+
+  workspace            list the workspaces and what is already running
+  workspace 3          open workspace 3 and switch to it
+  workspace writing    same, by name
+  workspace all        open every workspace's apps, without switching
+
+Which desktop each app lands on is not this tool's job: macOS enforces that from the
+app-bindings in com.apple.spaces, and new windows size themselves through the Hammerspoon
+watcher. So opening an app is enough, and activating one is what moves you to its desktop.
+
+Edit ~/.config/rex-comms/workspaces.json to change what belongs where.
+"""
+import json
+import os
+import subprocess
+import sys
+
+CONFIG = os.path.expanduser("~/.config/rex-comms/workspaces.json")
+B, D, G, Y, R = "\033[1m", "\033[2m", "\033[32m", "\033[33m", "\033[0m"
+
+
+def load():
+    try:
+        with open(CONFIG) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"no workspaces defined; create {CONFIG}")
+        return {}
+    except json.JSONDecodeError as exc:
+        print(f"{CONFIG} is not valid JSON: {exc}")
+        return {}
+
+
+def running(app):
+    found = subprocess.run(["/bin/ps", "-axo", "comm"], capture_output=True, text=True).stdout
+    return f"/{app}.app/" in found
+
+
+def launch(app, activate):
+    # -g keeps an app in the background, so opening a whole workspace does not drag you
+    # through five desktops. The first app of a chosen workspace is activated on purpose,
+    # because activating is what takes you to the desktop it is bound to.
+    args = ["open", "-a", app] if activate else ["open", "-g", "-a", app]
+    done = subprocess.run(args, capture_output=True, text=True)
+    return done.returncode == 0, done.stderr.strip()
+
+
+def resolve(data, wanted):
+    if wanted in data:
+        return wanted
+    for key, spec in data.items():
+        if spec.get("name", "").lower() == wanted.lower():
+            return key
+    return None
+
+
+def open_workspace(data, key, switch=True):
+    spec = data[key]
+    print(f"{B}{key}  {spec.get('name', '')}{R}")
+    first = True
+    for app in spec.get("apps", []):
+        if running(app):
+            print(f"  {D}already open{R}  {app}")
+            if first and switch:
+                launch(app, True)
+                first = False
+            continue
+        ok, err = launch(app, switch and first)
+        print(f"  {G}opened{R} {app}" if ok else f"  {Y}could not open {app}{R}  {D}{err}{R}")
+        first = False
+    for url in spec.get("urls", []):
+        subprocess.run(["open", "-g", url], capture_output=True)
+        print(f"  {G}opened{R} {url}")
+    return 0
+
+
+def listing(data):
+    print(f"{B}Workspaces{R}\n")
+    for key in sorted(data):
+        spec = data[key]
+        apps = spec.get("apps", [])
+        marks = [f"{a}{'' if running(a) else f' {D}(closed){R}'}" for a in apps]
+        print(f"  {B}{key}{R}  {spec.get('name',''):<16} {', '.join(marks)}")
+    print(f"\n{D}workspace <number|name> opens one, workspace all opens every one{R}")
+    print(f"{D}defined in {CONFIG.replace(os.path.expanduser('~'), '~')}{R}")
+    return 0
+
+
+def main():
+    data = load()
+    if not data:
+        return 1
+    if len(sys.argv) < 2:
+        return listing(data)
+    wanted = sys.argv[1]
+    if wanted == "all":
+        for key in sorted(data):
+            open_workspace(data, key, switch=False)
+        return 0
+    key = resolve(data, wanted)
+    if not key:
+        print(f"no workspace {wanted!r}")
+        return listing(data)
+    return open_workspace(data, key)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

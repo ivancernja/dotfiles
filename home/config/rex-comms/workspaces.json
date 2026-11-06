@@ -1,0 +1,36 @@
+{
+  "1": {
+    "name": "Development",
+    "apps": [
+      "Rex Beta"
+    ]
+  },
+  "2": {
+    "name": "Research",
+    "apps": [
+      "Google Chrome",
+      "Orion"
+    ],
+    "urls": []
+  },
+  "3": {
+    "name": "Writing",
+    "apps": [
+      "Inkdrop"
+    ]
+  },
+  "4": {
+    "name": "Bots",
+    "apps": [
+      "Grok Bot"
+    ]
+  },
+  "5": {
+    "name": "Chat and files",
+    "apps": [
+      "Finder",
+      "Slack",
+      "Discord"
+    ]
+  }
+}

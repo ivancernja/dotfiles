@@ -1,19 +1,21 @@
 #!/Users/ivan/rex/venv/bin/python
-"""Put the sessions back after a reboot.
+"""Put the sessions back after a reboot or a crash.
 
-  boot              recreate anything in the snapshot that is not already open
+  boot              recreate the "default" profile
+  boot last         recreate the rolling autosave, which is the one to use after a crash
   boot --dry-run    say what it would do
   boot --only www   just that session
 
-Reads ~/.config/rex-comms/sessions.json, written by `snapshot`.
+Reads ~/.config/rex-comms/profiles/<name>.json, written by `snapshot`.
 """
 import json
 import os
 import subprocess
 import sys
 
-SNAP = os.path.expanduser("~/.config/rex-comms/sessions.json")
 HOME = os.path.expanduser("~")
+PROFILES = os.path.join(HOME, ".config/rex-comms/profiles")
+LEGACY = os.path.join(HOME, ".config/rex-comms/sessions.json")
 SHELLS = {"login", "zsh", "bash", "sh", "fish", "nu", ""}
 AGENTS = {"claude": "claude --continue", "codex": "codex resume --last"}
 B, D, G, Y, R = "\033[1m", "\033[2m", "\033[32m", "\033[33m", "\033[0m"
@@ -36,13 +38,26 @@ def expand(path):
     return os.path.expanduser(path or "~")
 
 
+def run_args(pane):
+    """A pane that was running a ~/rex/bin tool comes back running it, arguments and all.
+
+    --keep-open leaves the pane there as a shell if the tool exits, so quitting the tool
+    does not take the pane with it. Older snapshots stored the command as a bare string."""
+    command = pane.get("command")
+    if not command:
+        return []
+    if isinstance(command, str):
+        command = [command]
+    return ["--keep-open", "--", expand(command[0]), *command[1:]]
+
+
 def resume_agent(session_id, block_id, pane):
     """A pane that had Claude or Codex in it comes back with that work picked up.
 
     The command is typed into the shell rather than run as the pane's program, so the
     pane is still a shell when you quit the agent, as it was before the reboot."""
     command = AGENTS.get(pane.get("agent", ""))
-    if not command or not block_id:
+    if not command or not block_id or pane.get("command"):
         return
     rex("send", "-s", session_id, "-b", block_id, command + "\n")
 
@@ -58,7 +73,8 @@ def make_session(session, dry):
         print(f"  would create {B}{label}{R} with {len(windows)} tabs")
         return
     created = rex("new", label, "-c", expand(first_pane["cwd"]),
-                  "--window", first_window.get("label") or "Shell", "--json")
+                  "--window", first_window.get("label") or "Shell", "--json",
+                  *run_args(first_pane))
     try:
         session_id = json.loads(created)["session_id"]
     except Exception:
@@ -70,7 +86,8 @@ def make_session(session, dry):
     for window in windows[1:]:
         panes = window["panes"]
         out = rex("window", "new", "-s", session_id, window.get("label") or "Shell",
-                  "-c", expand(panes[0]["cwd"]), "--focus=false", "--json")
+                  "-c", expand(panes[0]["cwd"]), "--focus=false", "--json",
+                  *run_args(panes[0]))
         try:
             block = json.loads(out)["block_ids"][0]
         except Exception:
@@ -83,7 +100,7 @@ def make_session(session, dry):
 def add_panes(session_id, anchor, panes):
     for pane in panes:
         out = rex("split", "-s", session_id, "-b", anchor, "--split=right",
-                  "-c", expand(pane["cwd"]), "--focus=false", "--json")
+                  "-c", expand(pane["cwd"]), "--focus=false", "--json", *run_args(pane))
         try:
             anchor = json.loads(out)["block_ids"][0]
         except Exception:
@@ -108,15 +125,25 @@ def main():
     if "--only" in sys.argv:
         index = sys.argv.index("--only")
         only = sys.argv[index + 1] if index + 1 < len(sys.argv) else None
+    positional = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if only in positional:
+        positional.remove(only)
+    name = positional[0] if positional else "default"
 
-    if not os.path.exists(SNAP):
-        print(f"nothing saved yet — run {B}snapshot{R} while your sessions are open")
+    snap = os.path.join(PROFILES, f"{name}.json")
+    if not os.path.exists(snap) and name == "default" and os.path.exists(LEGACY):
+        snap = LEGACY
+    if not os.path.exists(snap):
+        print(f"nothing saved as {B}{name}{R} — run {B}snapshot {name}{R} "
+              f"while your sessions are open")
+        print(f"{D}saved profiles:{R}")
+        subprocess.run([os.path.join(HOME, "rex/bin/snapshot"), "--list"])
         return 1
-    with open(SNAP) as f:
+    with open(snap) as f:
         saved = json.load(f)
 
     running = open_sessions()
-    print(f"{B}Restoring Rex{R}\n")
+    print(f"{B}Restoring Rex{R}  {D}{name}{R}\n")
     if not dry:
         tailnet()
         subprocess.run([os.path.expanduser("~/rex/bin/mini-link")],
@@ -137,7 +164,7 @@ def main():
             print(f"  {G}built{R} {B}{label}{R}  {D}{session['builder']}{R}")
         else:
             make_session(session, dry)
-    print(f"\n{D}snapshot: {SNAP}{R}")
+    print(f"\n{D}profile: {snap.replace(HOME, '~', 1)}{R}")
     return 0
 
 

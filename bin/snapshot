@@ -1,22 +1,35 @@
 #!/Users/ivan/rex/venv/bin/python
-"""Write down what is open in Rex, so a reboot does not cost you the setup.
+"""Write down what is open in Rex, so a crash does not cost you the setup.
 
-  snapshot            save every session to ~/.config/rex-comms/sessions.json
-  snapshot --show     print what is saved
+  snapshot               save every session to the "default" profile
+  snapshot work          save to the "work" profile instead
+  snapshot --show [name] print what is saved
+  snapshot --list        list the saved profiles
 
-Sessions with a known recipe (Comms) are saved as that recipe. Everything else is saved as
-its tabs, panes, and the directory each pane was sitting in, which is what `boot` restores.
+Sessions with a known recipe (Home, GrokBots) are saved as that recipe. Everything else is
+saved as its tabs, panes, the directory each pane was sitting in, and the ~/rex/bin tool it
+was running, which is what `boot` restores.
+
+A launch agent saves to the "last" profile every few minutes. `boot last` is the one to use
+after a crash; "default" is whatever you deliberately saved.
 """
 import json
 import os
+import shlex
 import subprocess
 import sys
 import urllib.parse
 
-OUT = os.path.expanduser("~/.config/rex-comms/sessions.json")
 HOME = os.path.expanduser("~")
-BUILDERS = {"Home": "~/rex/bin/comms"}
+PROFILES = os.path.join(HOME, ".config/rex-comms/profiles")
+LEGACY = os.path.join(HOME, ".config/rex-comms/sessions.json")
+TOOLS = os.path.join(HOME, "rex/bin") + "/"
+BUILDERS = {"Home": "~/rex/bin/comms", "GrokBots": "~/rex/bin/grok"}
 AGENTS = {"claude": "claude --continue", "codex": "codex resume --last"}
+
+
+def path_for(name):
+    return os.path.join(PROFILES, f"{name}.json")
 
 
 def rex(*args):
@@ -29,6 +42,10 @@ def jrex(*args):
         return json.loads(rex(*args))
     except Exception:
         return {}
+
+
+def short(path):
+    return path.replace(HOME, "~", 1) if path else path
 
 
 def descend_cwd(pid):
@@ -82,6 +99,32 @@ def descend_agent(pid):
     return ""
 
 
+def tool_command(child):
+    """The ~/rex/bin tool this pane is running, with its arguments, if it is running one.
+
+    Only tools from ~/rex/bin are recorded. boot re-runs whatever is saved here, so an
+    arbitrary program caught mid-flight is deliberately not turned into a startup command.
+
+    Rex reports a "script" field for a Python pane but not for a shell one, where it sees
+    only /bin/sh. The process argv has both in every case, so that is what is read, and it
+    keeps the arguments too. Each tool carries its own shebang, so the interpreter in front
+    of it is dropped."""
+    pid = child.get("pid")
+    argv = []
+    if pid:
+        line = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "args="],
+                              capture_output=True, text=True).stdout.strip()
+        try:
+            argv = shlex.split(line)
+        except ValueError:
+            argv = line.split()
+    for index, token in enumerate(argv):
+        if token.startswith(TOOLS):
+            return [short(token), *argv[index + 1:]]
+    candidate = child.get("script") or child.get("invoked_path") or ""
+    return [short(candidate)] if candidate.startswith(TOOLS) else []
+
+
 def pane_info(session_id, block_id):
     # The shell reports its directory to the terminal; fall back to the process table.
     reported = jrex("block", "call", "-s", session_id, "-b", block_id, "pwd").get("pwd", "")
@@ -93,8 +136,11 @@ def pane_info(session_id, block_id):
     cwd = cwd or child.get("cwd") or descend_cwd(child.get("pid")) or HOME
     program = os.path.basename(child.get("invoked_path") or child.get("name") or "")
     agent = program if program in AGENTS else descend_agent(child.get("pid"))
-    info = {"cwd": cwd.replace(HOME, "~", 1), "program": program}
-    if agent:
+    command = tool_command(child)
+    info = {"cwd": short(cwd), "program": program}
+    if command:
+        info["command"] = command
+    elif agent:
         info["agent"] = agent
     return info
 
@@ -131,22 +177,62 @@ def take():
     return {"sessions": sessions}
 
 
+def describe(session):
+    if "builder" in session:
+        return f"  {session['label']}  (built by {session['builder']})"
+    tabs = len(session["windows"])
+    panes = sum(len(w["panes"]) for w in session["windows"])
+    return f"  {session['label']}  {tabs} tabs, {panes} panes"
+
+
 def main():
-    if "--show" in sys.argv:
-        print(open(OUT).read() if os.path.exists(OUT) else "nothing saved yet")
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    flags = [a for a in sys.argv[1:] if a.startswith("-")]
+    name = args[0] if args else "default"
+    quiet = "--quiet" in flags
+
+    os.makedirs(PROFILES, exist_ok=True)
+    # The single-file layout came first. Keep it as the seed for "default".
+    if not os.path.exists(path_for("default")) and os.path.exists(LEGACY):
+        with open(LEGACY) as src, open(path_for("default"), "w") as dst:
+            dst.write(src.read())
+
+    if "--list" in flags:
+        found = sorted(f[:-5] for f in os.listdir(PROFILES) if f.endswith(".json"))
+        for item in found:
+            stat = os.stat(path_for(item))
+            when = subprocess.run(["date", "-r", str(int(stat.st_mtime)), "+%a %d %b %H:%M"],
+                                  capture_output=True, text=True).stdout.strip()
+            with open(path_for(item)) as f:
+                count = len(json.load(f).get("sessions", []))
+            print(f"  {item:<12} {count} sessions   saved {when}")
+        if not found:
+            print("  nothing saved yet")
         return 0
+
+    if "--show" in flags:
+        target = path_for(name)
+        print(open(target).read() if os.path.exists(target) else f"nothing saved as {name!r}")
+        return 0
+
     data = take()
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "w") as f:
+    target = path_for(name)
+    # A snapshot taken while the server is down or unreachable comes back empty, and the
+    # autosave runs unattended. An empty profile is never worth saving: it cannot restore
+    # anything, and writing one would either erase a good profile or create a useless one
+    # that looks like a real save.
+    if not data["sessions"] and "--force" not in flags:
+        if not quiet:
+            print(f"found no sessions, so {name!r} was not written "
+                  f"(use --force to save an empty profile)")
+        return 1
+    with open(target, "w") as f:
         json.dump(data, f, indent=2)
+    if quiet:
+        return 0
     for session in data["sessions"]:
-        if "builder" in session:
-            print(f"  {session['label']}  (built by {session['builder']})")
-        else:
-            tabs = len(session["windows"])
-            panes = sum(len(w["panes"]) for w in session["windows"])
-            print(f"  {session['label']}  {tabs} tabs, {panes} panes")
-    print(f"\nsaved to {OUT}")
+        print(describe(session))
+    print(f"\nsaved as {name!r} in {short(path_for(name))}")
     return 0
 
 
