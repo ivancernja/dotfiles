@@ -2,28 +2,26 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key>
-  <string>dev.rex.snapshot</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/Users/ivan/rex/bin/snapshot</string>
-    <string>last</string>
-    <string>--quiet</string>
-  </array>
-  <key>StartInterval</key>
-  <integer>300</integer>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>/Users/ivan/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS:/Users/ivan/rex/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-  </dict>
-  <key>StandardErrorPath</key>
-  <string>/Users/ivan/.config/rex-comms/snapshot.log</string>
-  <key>ProcessType</key>
-  <string>Background</string>
-  <key>LowPriorityIO</key>
-  <true/>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/Users/ivan/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS:/Users/ivan/rex/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>Label</key>
+	<string>dev.rex.snapshot</string>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/ivan/rex/bin/snapshot</string>
+		<string>last</string>
+		<string>--quiet</string>
+	</array>
+	<key>StandardErrorPath</key>
+	<string>/Users/ivan/.config/rex-comms/snapshot.log</string>
+	<key>StartInterval</key>
+	<integer>300</integer>
 </dict>
 </plist>

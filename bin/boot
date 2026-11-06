@@ -26,6 +26,13 @@ def rex(*args):
     return p.stdout.strip()
 
 
+def jrex(*args):
+    try:
+        return json.loads(rex(*args))
+    except Exception:
+        return {}
+
+
 def open_sessions():
     try:
         rows = json.loads(rex("ls", "--json")).get("sessions", [])
@@ -108,6 +115,96 @@ def add_panes(session_id, anchor, panes):
         resume_agent(session_id, anchor, pane)
 
 
+def process_tree():
+    """parent -> children, and pid -> command name, in one pass."""
+    rows = subprocess.run(["/bin/ps", "-axo", "pid,ppid,comm"],
+                          capture_output=True, text=True).stdout
+    children, names = {}, {}
+    for line in rows.splitlines()[1:]:
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+            names[int(parts[0])] = os.path.basename(parts[2].strip())
+    return children, names
+
+
+def agent_in(session_id, block_id, children, names):
+    """The coding agent running under a pane right now, if any."""
+    info = jrex("block", "call", "-s", session_id, "-b", block_id, "process")
+    pid = (info.get("child") or {}).get("pid")
+    if not pid:
+        return ""
+    seen, frontier = set(), [int(pid)]
+    while frontier:
+        current = frontier.pop(0)
+        for kid in children.get(current, []):
+            if kid in seen:
+                continue
+            seen.add(kid)
+            if names.get(kid, "") in AGENTS:
+                return names[kid]
+            frontier.append(kid)
+    return ""
+
+
+def windows_of(session_id):
+    view = jrex("session", "inspect", session_id, "--json")
+    found = []
+    for window in view.get("windows", []):
+        blocks = [b["block_id"] for layer in window.get("layers", [])
+                  for b in layer.get("blocks", [])]
+        found.append((window.get("label") or "", blocks))
+    return found
+
+
+def reconcile(session_id, session, dry):
+    """Bring an already-open session up to what the profile says.
+
+    The Rex server restores its own sessions at login, so by the time this runs the
+    session usually exists but with fewer windows and no agents in them: a process does
+    not survive a reboot. Skipping it, which is what this used to do, meant a restored
+    session never got its agents back. So add the missing windows and resume any agent
+    that the profile expected and that is not running."""
+    have = {}
+    for label, blocks in windows_of(session_id):
+        have.setdefault(label, []).append(blocks)
+    children, names = process_tree()
+    added = resumed = 0
+
+    for window in session.get("windows", []):
+        label = window.get("label") or "Shell"
+        panes = window.get("panes", [])
+        if not panes:
+            continue
+        slots = have.get(label)
+        if slots:
+            blocks = slots.pop(0)
+            if not slots:
+                have.pop(label, None)
+            for pane, block in zip(panes, blocks):
+                if not pane.get("agent"):
+                    continue
+                if agent_in(session_id, block, children, names):
+                    continue
+                if not dry:
+                    resume_agent(session_id, block, pane)
+                resumed += 1
+            continue
+        added += 1
+        if dry:
+            continue
+        out = rex("window", "new", "-s", session_id, label,
+                  "-c", expand(panes[0]["cwd"]), "--focus=false", "--json",
+                  *run_args(panes[0]))
+        try:
+            block = json.loads(out)["block_ids"][0]
+        except Exception:
+            continue
+        resume_agent(session_id, block, panes[0])
+        add_panes(session_id, block, panes[1:])
+    return added, resumed
+
+
 def tailnet():
     """Re-serve the API over the tailnet. `tailscale on` is runtime-only, so a
     restarted server comes back with it off. The enrolled identity is kept, so
@@ -153,7 +250,17 @@ def main():
         if only and label != only:
             continue
         if label in running:
-            print(f"  {D}already open{R}  {label}")
+            added, resumed = reconcile(running[label], session, dry)
+            if added or resumed:
+                bits = []
+                if added:
+                    bits.append(f"{added} windows")
+                if resumed:
+                    bits.append(f"{resumed} agents")
+                verb = "would restore" if dry else "restored"
+                print(f"  {G}{verb}{R} {B}{label}{R}  {D}{' and '.join(bits)}{R}")
+            else:
+                print(f"  {D}already complete{R}  {label}")
             continue
         if session.get("builder"):
             builder = expand(session["builder"])
