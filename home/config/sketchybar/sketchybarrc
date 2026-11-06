@@ -12,13 +12,12 @@ ACCENT=0xffb696f7
 TEAL=0xff5ad1c4
 FONT="JetBrainsMono Nerd Font"
 
-# macOS reserves 28pt at the top of the screen for the menu bar even when the menu bar
-# is set to hide, and SketchyBar honours that safe area. The negative offset pulls the bar
-# into it so it sits flush. If the menu bar is ever set visible again, set this back to 0
-# or the two will overlap.
+# SketchyBar positions from the physical top of the display, not from below the menu bar,
+# so no offset is needed once the menu bar is hidden. A negative offset here pushes the bar
+# off the screen entirely, which is not obvious because the process keeps running.
 sketchybar --bar height=32 \
                  position=top \
-                 y_offset=-28 \
+                 y_offset=0 \
                  blur_radius=20 \
                  color=$BAR_BG \
                  padding_left=8 \
