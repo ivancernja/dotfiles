@@ -1,0 +1,298 @@
+#!/Users/ivan/rex/venv/bin/python
+"""Your pull requests in www and examples, with their files, and a way to review them.
+
+Left: the pull requests you opened. Right: the files that pull request touches.
+
+Enter on a file opens its diff in a new pane, exactly as the pull request shows it: the
+patch comes from the pull request's files API, not from your working tree, so it is the
+change under review whatever your checkout is on.
+
+Enter on a pull request, or the Open in nvim button, builds a git worktree for that pull
+request under ~/.cache/pr-review and opens nvim there with just its files, as a tree. A
+worktree leaves your clone's branch and uncommitted work alone.
+
+Navigation: arrows or j and k move, tab or right goes to the files, escape or left goes
+back to the pull requests, enter opens. Authentication is whatever `gh` already uses.
+"""
+import json
+import os
+import subprocess
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Button, DataTable, Footer, Header, Label, Static
+
+REPOS = ["encoredev/www", "encoredev/examples"]
+CLONES = {
+    "encoredev/www": "~/Development/Encore/www",
+    "encoredev/examples": "~/Development/Encore/examples",
+    "encoredev/encore": "~/Development/Encore/encore",
+}
+
+
+def gh(*args, cwd=None):
+    done = subprocess.run(["gh", *args], capture_output=True, text=True, cwd=cwd)
+    return done.stdout, done.stderr, done.returncode
+
+
+class Reviews(App):
+    CSS = """
+    Screen { background: #11151c; color: #c9d3df; }
+    #bar { height: auto; padding: 1 2 0 2; }
+    Button { background: #1d242e; color: #c9d3df; border: none; margin: 0 1 1 0; min-width: 10; }
+    Button:hover { background: #26303c; color: #b696f7; }
+    Button.on { background: #b696f7; color: #11151c; }
+    #split { height: 1fr; }
+    #prs { width: 3fr; margin: 0 1 0 2; background: #11151c; }
+    #files { width: 2fr; margin: 0 2 0 1; background: #11151c; }
+    DataTable:focus { border-left: thick #b696f7; }
+    DataTable > .datatable--header { background: #171d26; color: #71808f; text-style: bold; }
+    DataTable > .datatable--cursor { background: #26303c; }
+    #detail { height: auto; padding: 1 2 0 2; background: #151b23; border-top: solid #262e3a; }
+    .dim { color: #71808f; }
+    #note { height: auto; padding: 0 2 1 2; color: #71808f; }
+    """
+    BINDINGS = [
+        Binding("escape", "back", "Back", show=True),
+        Binding("tab", "forward", "Files", show=True),
+        Binding("r", "reload", "Refresh", show=True),
+        Binding("v", "nvim", "Open in nvim", show=True),
+        Binding("d", "diff", "Whole diff", show=True),
+        Binding("o", "open", "On GitHub", show=True),
+        Binding("q", "quit", "Quit", show=True),
+        Binding("left", "back", "", show=False),
+        Binding("right", "forward", "", show=False),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.state = "open"
+        self.prs = []
+        self.files = []
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Horizontal(id="bar"):
+            yield Button("Open", id="s-open", classes="on")
+            yield Button("All", id="s-all")
+            yield Button("Refresh", id="reload")
+            yield Button("Open in nvim", id="nvim")
+            yield Button("Whole diff", id="whole")
+            yield Button("On GitHub", id="open")
+        with Horizontal(id="split"):
+            yield DataTable(cursor_type="row", id="prs")
+            yield DataTable(cursor_type="row", id="files")
+        with Vertical(id="detail"):
+            yield Label("", id="what")
+            yield Static("", id="meta", classes="dim")
+        yield Label("", id="note")
+        yield Footer()
+
+    def on_mount(self):
+        self.title = "Pull requests"
+        self.query_one("#prs", DataTable).add_columns("#", "title", "repo", "state")
+        self.query_one("#files", DataTable).add_columns("file", "+", "-")
+        # Start on the list rather than the buttons, so arrows work immediately.
+        self.query_one("#prs", DataTable).focus()
+        self.load()
+        self.set_interval(240, self.load)
+
+    def note(self, text):
+        self.query_one("#note", Label).update(text)
+
+    @work(thread=True, exclusive=True)
+    def load(self):
+        rows, problems = [], []
+        for repo in REPOS:
+            args = ["pr", "list", "--repo", repo, "--author=@me", "--limit", "40",
+                    "--json", "number,title,state,url,headRefName"]
+            args += ["--state", "all" if self.state == "all" else "open"]
+            out, err, code = gh(*args)
+            if code != 0:
+                problems.append(f"{repo}: {err.strip()[:60]}")
+                continue
+            try:
+                for pr in json.loads(out):
+                    pr["repo"] = repo
+                    rows.append(pr)
+            except Exception:
+                pass
+        rows.sort(key=lambda p: p["number"], reverse=True)
+        self.call_from_thread(self.paint, rows, "; ".join(problems))
+
+    def paint(self, rows, error):
+        table = self.query_one("#prs", DataTable)
+        table.clear()
+        self.prs = rows
+        for pr in rows:
+            table.add_row(str(pr["number"]), pr["title"][:56],
+                          pr["repo"].split("/")[-1], pr["state"].lower())
+        self.note(error or f"{len(rows)} pull requests you opened")
+        if rows:
+            table.move_cursor(row=0)
+
+    def current_pr(self):
+        table = self.query_one("#prs", DataTable)
+        row = table.cursor_row
+        return self.prs[row] if 0 <= row < len(self.prs) else None
+
+    @on(DataTable.RowHighlighted, "#prs")
+    def pr_highlighted(self, event: DataTable.RowHighlighted):
+        pr = self.current_pr()
+        if not pr:
+            return
+        self.query_one("#what", Label).update(f"#{pr['number']}  {pr['title']}")
+        self.query_one("#meta", Static).update(
+            f"{pr['repo']}      {pr['state'].lower()}      {pr.get('headRefName','')}")
+        self.load_files(pr["repo"], pr["number"])
+
+    @work(thread=True, exclusive=True)
+    def load_files(self, repo, number):
+        out, _, code = gh("api", f"repos/{repo}/pulls/{number}/files", "--paginate",
+                          "--jq", ".[] | {filename, additions, deletions}")
+        rows = []
+        if code == 0:
+            for line in out.splitlines():
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    pass
+        self.call_from_thread(self.paint_files, rows)
+
+    def paint_files(self, rows):
+        table = self.query_one("#files", DataTable)
+        table.clear()
+        self.files = rows
+        for item in rows:
+            name = item["filename"]
+            if len(name) > 42:
+                name = "…" + name[-41:]
+            table.add_row(name, f"+{item['additions']}", f"-{item['deletions']}")
+
+    # Navigation -------------------------------------------------------------
+    def action_forward(self):
+        if self.query_one("#prs", DataTable).has_focus and self.files:
+            self.query_one("#files", DataTable).focus()
+        else:
+            self.query_one("#prs", DataTable).focus()
+
+    def action_back(self):
+        self.query_one("#prs", DataTable).focus()
+
+    @on(DataTable.RowSelected, "#prs")
+    def pr_selected(self, event: DataTable.RowSelected):
+        if self.files:
+            self.query_one("#files", DataTable).focus()
+
+    @on(DataTable.RowSelected, "#files")
+    def file_chosen(self, event: DataTable.RowSelected):
+        pr = self.current_pr()
+        row = event.cursor_row
+        if not pr or not (0 <= row < len(self.files)):
+            return
+        self.show_diff(pr["repo"], pr["number"], self.files[row]["filename"])
+
+    # Panes ------------------------------------------------------------------
+    def open_pane(self, label, command):
+        session = os.environ.get("REX_SESSION", "")
+        block = os.environ.get("REX_BLOCK", "")
+        if not (session and block):
+            self.note("not running inside a Rex pane, cannot open one")
+            return False
+        subprocess.run(["rex", "split", "-s", session, "-b", block,
+                        "--split=right", "--ratio", "50", "--focus=false",
+                        "--keep-open", "--label", label, "--", "sh", "-c", command],
+                       capture_output=True)
+        return True
+
+    def show_diff(self, repo, number, filename):
+        command = (
+            f"gh api repos/{repo}/pulls/{number}/files --paginate "
+            f"--jq '.[] | select(.filename==\"{filename}\") | .patch' "
+            f"| sed '1i\\\n--- a/{filename}\\\n+++ b/{filename}\\\n' "
+            f"| delta --paging=always --wrap-max-lines 30 || true"
+        )
+        if self.open_pane(os.path.basename(filename)[:14], command):
+            self.note(f"opened the diff for {filename}")
+
+    def action_nvim(self):
+        pr = self.current_pr()
+        if not pr:
+            self.note("select a pull request first")
+            return
+        clone = os.path.expanduser(CLONES.get(pr["repo"], ""))
+        if not os.path.isdir(os.path.join(clone, ".git")):
+            self.note(f"no local clone for {pr['repo']}")
+            return
+        if not self.files:
+            self.note("no files loaded for this pull request yet")
+            return
+
+        # A worktree rather than a checkout: it leaves the clone's branch and any
+        # uncommitted work alone, it does not collide with a branch already checked out
+        # somewhere else, and several pull requests can be open at once.
+        slug = pr["repo"].split("/")[-1]
+        tree = os.path.expanduser(f"~/.cache/pr-review/{slug}-{pr['number']}")
+        names = " ".join(
+            "'" + f["filename"].replace("'", "'\\''") + "'" for f in self.files)
+        # Neotree in buffers mode shows a tree of exactly the files that were opened,
+        # which is this pull request's files and nothing else.
+        command = (
+            f"set -e; "
+            f"if [ ! -d '{tree}' ]; then "
+            f"  git -C '{clone}' fetch -q origin pull/{pr['number']}/head; "
+            f"  mkdir -p ~/.cache/pr-review; "
+            f"  git -C '{clone}' worktree add --detach -q '{tree}' FETCH_HEAD; "
+            f"fi; "
+            # Wrapping matters because most of these files are prose. No showbreak:
+            # escaping a trailing space through sh into a vim -c argument is more
+            # trouble than the marker is worth.
+            f"cd '{tree}' && nvim "
+            f"-c 'set wrap linebreak breakindent' "
+            f"-c 'Neotree buffers' {names}"
+        )
+        if self.open_pane(f"#{pr['number']} files", command):
+            self.note(f"opening #{pr['number']} in a worktree at {tree}")
+
+    @on(Button.Pressed)
+    def clicked(self, event: Button.Pressed):
+        bid = event.button.id or ""
+        if bid.startswith("s-"):
+            self.state = bid[2:]
+            for name in ("open", "all"):
+                self.query_one(f"#s-{name}", Button).set_class(
+                    name == self.state, "on")
+            self.load()
+        elif bid == "reload":
+            self.load()
+        elif bid == "nvim":
+            self.action_nvim()
+        elif bid == "whole":
+            self.action_diff()
+        elif bid == "open":
+            self.action_open()
+        self.query_one("#prs", DataTable).focus()
+
+    def action_diff(self):
+        pr = self.current_pr()
+        if not pr:
+            return
+        command = (f"gh pr diff {pr['number']} --repo {pr['repo']} "
+                   f"| delta --paging=always --wrap-max-lines 30 || true")
+        if self.open_pane(f"#{pr['number']} diff", command):
+            self.note(f"opened the whole diff for #{pr['number']}")
+
+    def action_open(self):
+        pr = self.current_pr()
+        if pr and pr.get("url"):
+            subprocess.run(["open", pr["url"]], capture_output=True)
+            self.note(f"opened #{pr['number']} on GitHub")
+
+    def action_reload(self):
+        self.load()
+
+
+if __name__ == "__main__":
+    Reviews().run()

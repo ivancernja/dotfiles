@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Build the Work session, or focus it if it is already running.
+# Linear on one tab, pull requests on another.
+set -e
+BIN="$HOME/rex/bin"
+
+sid=$(rex ls --json | jq -r '.sessions[]? | select(.label=="Work") | .session_id' | head -1)
+if [ -n "$sid" ]; then
+  rex do session.select session_id="$sid" 2>/dev/null || true
+  echo "$sid"
+  exit 0
+fi
+
+created=$(rex new Work --window "󰓹  Linear" --keep-open --json -- "$BIN/linear-pane")
+sid=$(printf '%s' "$created" | jq -er '.session_id')
+
+rex window new -s "$sid" "  Reviews" --focus=false --keep-open -- "$BIN/github-pane" >/dev/null
+
+rex do session.select session_id="$sid" 2>/dev/null || true
+echo "$sid"

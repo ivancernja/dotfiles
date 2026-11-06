@@ -41,3 +41,15 @@ rex.action{
     return out
   end,
 }
+
+-- Work: Linear on one tab, your pull requests on another. Built by ~/rex/bin/work.
+rex.action{
+  name  = "work",
+  title = "Open Work Session",
+  description = "Linear issues and your pull requests, with diffs and nvim review",
+  run   = function()
+    local out, err = rex.exec{ os.getenv("HOME") .. "/rex/bin/work" }
+    if err ~= nil then error(err, 0) end
+    return out
+  end,
+}

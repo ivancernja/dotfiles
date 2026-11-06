@@ -1,0 +1,255 @@
+#!/Users/ivan/rex/venv/bin/python
+"""Linear as a pane you click: your issues, and their status changed in one click.
+
+The token is the same one `linear-todo` uses, in the login keychain under the service
+"linear-terminal". If it is missing, run `linear-login`.
+"""
+import json
+import os
+import subprocess
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+from textual import on, work
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Button, DataTable, Footer, Header, Label, Static
+
+API = "https://api.linear.app/graphql"
+SERVICE = "linear-terminal"
+PRIORITY = {0: "", 1: "urgent", 2: "high", 3: "medium", 4: "low"}
+
+QUERY = """
+query {
+  viewer {
+    assignedIssues(first: 100, orderBy: updatedAt) {
+      nodes {
+        id identifier title priority url updatedAt
+        state { id name type }
+        team { id key states(first: 40) { nodes { id name type position } } }
+      }
+    }
+  }
+}
+"""
+
+MUTATION = """
+mutation($id: String!, $stateId: String!) {
+  issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+}
+"""
+
+
+def token():
+    found = subprocess.run(
+        ["security", "find-generic-password", "-a", os.environ.get("USER", "ivan"),
+         "-s", SERVICE, "-w"], capture_output=True, text=True)
+    return found.stdout.strip()
+
+
+def call(query, variables=None):
+    key = token()
+    if not key:
+        return None, "No Linear token. Run linear-login first."
+    body = json.dumps({"query": query, "variables": variables or {}}).encode()
+    request = urllib.request.Request(API, data=body, headers={
+        "Content-Type": "application/json", "Authorization": key})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode())
+    except urllib.error.HTTPError as exc:
+        return None, f"Linear returned {exc.code}: {exc.read().decode()[:200]}"
+    except urllib.error.URLError as exc:
+        return None, f"Could not reach Linear: {exc.reason}"
+    if payload.get("errors"):
+        return None, payload["errors"][0].get("message", "unknown error")
+    return payload.get("data"), None
+
+
+def ago(stamp):
+    try:
+        when = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except Exception:
+        return ""
+    delta = datetime.now(timezone.utc) - when
+    hours = delta.total_seconds() / 3600
+    if hours < 1:
+        return f"{int(delta.total_seconds() // 60)}m"
+    if hours < 48:
+        return f"{int(hours)}h"
+    return f"{int(hours // 24)}d"
+
+
+class Linear(App):
+    CSS = """
+    Screen { background: #11151c; color: #c9d3df; }
+    #bar { height: auto; padding: 1 2 0 2; }
+    Button { background: #1d242e; color: #c9d3df; border: none; margin: 0 1 1 0; min-width: 10; }
+    Button:hover { background: #26303c; color: #b696f7; }
+    Button.on { background: #b696f7; color: #11151c; }
+    DataTable { height: 1fr; margin: 0 2; background: #11151c; }
+    DataTable:focus { border-left: thick #b696f7; }
+    DataTable > .datatable--header { background: #171d26; color: #71808f; text-style: bold; }
+    DataTable > .datatable--cursor { background: #26303c; }
+    #detail { height: auto; padding: 1 2 0 2; background: #151b23; border-top: solid #262e3a; }
+    #states { height: auto; padding: 0 2 1 2; background: #151b23; }
+    .dim { color: #71808f; }
+    #note { height: auto; padding: 0 2 1 2; color: #71808f; }
+    """
+    BINDINGS = [
+        Binding("escape", "back", "Back to list", show=True),
+        Binding("r", "reload", "Refresh", show=True),
+        Binding("o", "open", "Open in Linear", show=True),
+        Binding("q", "quit", "Quit", show=True),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self.showing = "active"
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Horizontal(id="bar"):
+            yield Button("Active", id="f-active", classes="on")
+            yield Button("All", id="f-all")
+            yield Button("Refresh", id="reload")
+            yield Button("Open in Linear", id="open")
+        yield DataTable(cursor_type="row", id="issues")
+        with Vertical(id="detail"):
+            yield Label("", id="what")
+            yield Static("", id="meta", classes="dim")
+        yield Horizontal(id="states")
+        yield Label("", id="note")
+        yield Footer()
+
+    def on_mount(self):
+        self.title = "Linear"
+        self.query_one("#issues", DataTable).add_columns(
+            "id", "title", "status", "priority", "updated")
+        # Start on the list rather than the buttons, so arrows work immediately.
+        self.query_one("#issues", DataTable).focus()
+        self.load()
+        self.set_interval(180, self.load)
+
+    def note(self, text):
+        self.query_one("#note", Label).update(text)
+
+    @work(thread=True, exclusive=True)
+    def load(self):
+        data, error = call(QUERY)
+        self.call_from_thread(self.paint, data, error)
+
+    def paint(self, data, error):
+        table = self.query_one("#issues", DataTable)
+        table.clear()
+        if error:
+            self.rows = []
+            self.note(error)
+            return
+        issues = data["viewer"]["assignedIssues"]["nodes"]
+        if self.showing == "active":
+            issues = [i for i in issues
+                      if i["state"]["type"] not in
+                      ("completed", "canceled", "duplicate")]
+        self.rows = issues
+        for issue in issues:
+            table.add_row(
+                issue["identifier"],
+                issue["title"][:64],
+                issue["state"]["name"],
+                PRIORITY.get(issue.get("priority") or 0, ""),
+                ago(issue["updatedAt"]),
+            )
+        self.note(f"{len(issues)} issues")
+        if issues:
+            table.move_cursor(row=0)
+
+    def current(self):
+        table = self.query_one("#issues", DataTable)
+        row = table.cursor_row
+        return self.rows[row] if 0 <= row < len(self.rows) else None
+
+    @on(DataTable.RowHighlighted, "#issues")
+    async def highlighted(self, event: DataTable.RowHighlighted):
+        issue = self.current()
+        if not issue:
+            return
+        self.query_one("#what", Label).update(
+            f"{issue['identifier']}  {issue['title']}")
+        self.query_one("#meta", Static).update(
+            f"{issue['team']['key']}      {issue['state']['name']}"
+            f"      updated {ago(issue['updatedAt'])} ago")
+
+        states = self.query_one("#states", Horizontal)
+        # Awaited, because moving the cursor quickly would otherwise mount the next
+        # row's buttons before the previous ones were gone, and two widgets cannot
+        # share an id. That crashed the pane.
+        await states.remove_children()
+        # Only the states that belong to this issue's own team, in board order.
+        options = sorted(issue["team"]["states"]["nodes"],
+                         key=lambda s: s.get("position") or 0)
+        buttons = []
+        for state in options:
+            if state["type"] == "duplicate":
+                continue
+            button = Button(state["name"], id=f"s-{state['id']}")
+            if state["id"] == issue["state"]["id"]:
+                button.add_class("on")
+            buttons.append(button)
+        if buttons:
+            await states.mount(*buttons)
+
+    @work(thread=True)
+    def set_state(self, issue_id, state_id, name):
+        data, error = call(MUTATION, {"id": issue_id, "stateId": state_id})
+        if error:
+            self.call_from_thread(self.note, f"could not move it: {error}")
+            return
+        if not (data or {}).get("issueUpdate", {}).get("success"):
+            self.call_from_thread(self.note, "Linear refused the change")
+            return
+        self.call_from_thread(self.note, f"moved to {name}")
+        self.load()
+
+    @on(Button.Pressed)
+    def clicked(self, event: Button.Pressed):
+        bid = event.button.id or ""
+        if bid.startswith("f-"):
+            self.showing = bid[2:]
+            for name in ("active", "all"):
+                self.query_one(f"#f-{name}", Button).set_class(
+                    name == self.showing, "on")
+            self.load()
+        elif bid == "reload":
+            self.load()
+        elif bid == "open":
+            self.action_open()
+        elif bid.startswith("s-"):
+            issue = self.current()
+            if not issue:
+                return
+            state_id = bid[2:]
+            if state_id == issue["state"]["id"]:
+                return
+            self.note("moving…")
+            self.set_state(issue["id"], state_id, str(event.button.label))
+        self.query_one("#issues", DataTable).focus()
+
+    def action_open(self):
+        issue = self.current()
+        if issue:
+            subprocess.run(["open", issue["url"]], capture_output=True)
+            self.note(f"opened {issue['identifier']}")
+
+    def action_back(self):
+        self.query_one("#issues", DataTable).focus()
+
+    def action_reload(self):
+        self.load()
+
+
+if __name__ == "__main__":
+    Linear().run()
