@@ -1,0 +1,12 @@
+{
+  ".mde-preview": {
+    "space e": "core:find-global",
+    "space i": "core:focus-note-list-bar"
+  },
+  "global": {
+    "cmd-shift-i": "application:show-and-focus-main-window"
+  },
+  "body": {
+    "cmd-shift-/": "custom:toggle-nav-hints"
+  }
+}

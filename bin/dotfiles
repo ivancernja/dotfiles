@@ -17,6 +17,8 @@ config/sketchybar/plugins/space.sh|$HOME/.config/sketchybar/plugins/space.sh
 config/sketchybar/plugins/front_app.sh|$HOME/.config/sketchybar/plugins/front_app.sh
 config/sketchybar/plugins/clock.sh|$HOME/.config/sketchybar/plugins/clock.sh
 config/sketchybar/plugins/battery.sh|$HOME/.config/sketchybar/plugins/battery.sh
+inkdrop/init.js|$HOME/Library/Application Support/inkdrop/init.js
+inkdrop/keymap.json|$HOME/Library/Application Support/inkdrop/keymap.json
 "
 
 case "${1:-pull}" in
