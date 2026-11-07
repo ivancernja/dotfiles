@@ -134,9 +134,17 @@ None of this can be scripted.
 - **Grant Accessibility to Hammerspoon** in System Settings, Privacy and Security. Window
   sizing, the page keys and the window rescue all depend on it.
 - **Create five desktops** in Mission Control if `macos-defaults.sh` says there are fewer.
-- **Raycast** cannot be transferred. Its config is in SQLCipher databases with the key in
-  the keychain. Install it, set the hotkey to cmd+Space (moving Spotlight to ctrl+Space),
-  and re-add the extensions and the cmd+shift app shortcuts by hand.
+- **Raycast** imports from `secrets/raycast.rayconfig`: open Raycast, Settings, Advanced,
+  Import, and pick that file. It carries the settings, the extension list and their
+  configuration, quicklinks, snippets, aliases and hotkeys.
+
+  The file is encrypted, so **you need the password that was set when it was exported**.
+  It is not in this repo and cannot be recovered from the file.
+
+  Afterwards, check the hotkeys actually came across, particularly the cmd+shift window
+  shortcuts and the cmd+shift app jumps. If they did not, set them by hand, and set the
+  Raycast hotkey to cmd+Space, which means moving Spotlight to ctrl+Space in System
+  Settings.
 - **Login items**: Raycast and Hammerspoon. Nothing else.
 - **SSH keys** are in this repo, under `secrets/ssh`. `./bin/restore-ssh` puts them in
   `~/.ssh` with the right permissions, and never overwrites a key that is already there.
