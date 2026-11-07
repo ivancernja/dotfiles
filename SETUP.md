@@ -141,10 +141,9 @@ None of this can be scripted.
   The file is encrypted, so **you need the password that was set when it was exported**.
   It is not in this repo and cannot be recovered from the file.
 
-  Afterwards, check the hotkeys actually came across, particularly the cmd+shift window
-  shortcuts and the cmd+shift app jumps. If they did not, set them by hand, and set the
-  Raycast hotkey to cmd+Space, which means moving Spotlight to ctrl+Space in System
-  Settings.
+  Afterwards, check the hotkeys actually came across. **Every key this machine binds**
+  below lists exactly which ones Raycast is responsible for and what each should do, so
+  any that did not survive the import can be set by hand.
 - **Login items**: Raycast and Hammerspoon. Nothing else.
 - **SSH keys** are in this repo, under `secrets/ssh`. `./bin/restore-ssh` puts them in
   `~/.ssh` with the right permissions, and never overwrites a key that is already there.
@@ -182,6 +181,78 @@ git push
 That stops them being handed to the next clone. It does not remove them from history, so
 the old keys stay readable to anyone who already has one. That is fine once the hosts no
 longer accept them, which is the point of doing this.
+
+## Every key this machine binds
+
+Most of these come back on their own, because the config that defines them is in this
+repo. The Raycast ones are the exception: they live inside Raycast and only arrive if the
+import worked, so check them and set any that are missing.
+
+### Comes back by itself
+
+`macos-defaults.sh` writes these:
+
+| Key | What |
+|---|---|
+| `cmd+1` to `cmd+5` | go to desktop 1 to 5 |
+| `ctrl+left` / `ctrl+right` | one desktop left or right |
+| `ctrl+space` | Spotlight, moved off cmd+Space so Raycast can have it |
+
+Hammerspoon, from `home/hammerspoon/init.lua`:
+
+| Key | What |
+|---|---|
+| `page up` / `page down` | one desktop left or right |
+| `ctrl+alt+cmd+M` | almost maximize the focused window |
+| `ctrl+alt+cmd+R` | rescue windows stranded off screen or minimized |
+| `ctrl+alt+cmd+O` | turn the one-window-per-desktop reminder on or off |
+
+Hammerspoon also does two things with no key at all:
+
+- **Every new window opens almost maximized**, 92% by 94%, centred. Nothing to configure
+  and nothing in Raycast does it, which is why it is here: Raycast cannot resize a window
+  at the moment macOS creates it. Small windows, dialogs and a handful of apps are exempt;
+  the list is in `init.lua`.
+- **A second window on a desktop says so**, and touches nothing.
+
+Rex, from `home/config/rex/init.lua`:
+
+| Key | What |
+|---|---|
+| `cmd+K` | clear the terminal |
+| `shift+cmd+K` | switch session |
+| `alt+space` | show or hide Rex over whatever is in front |
+
+Inkdrop, from `home/inkdrop/keymap.json`, plus the vim plugin's own `j k l h`:
+
+| Key | What |
+|---|---|
+| `cmd+shift+/` | the navigation cheat sheet |
+| `ctrl+;` | hint mode, label everything clickable |
+| `space f` | hint mode, while reading a note |
+| `space e` | search everything |
+| `space i` | focus the note list |
+| `cmd+shift+I` | bring Inkdrop to the front |
+
+### Has to be checked in Raycast
+
+These live in Raycast and nowhere else. If the `.rayconfig` import carried them, leave
+them alone. If not, add them in Raycast's settings by hand.
+
+| Key | What |
+|---|---|
+| `cmd+space` | Raycast itself |
+| `cmd+shift+up` | Almost Maximize, centred at about 92% by 94% |
+| `cmd+shift+left` | left half |
+| `cmd+shift+right` | right half |
+| `cmd+shift+down` | restore the previous size |
+| `cmd+shift+D` | Discord |
+| `cmd+shift+S` | Slack |
+| `cmd+shift+G` | Grok Bot |
+
+Note the overlap on purpose: `ctrl+alt+cmd+M` in Hammerspoon and `cmd+shift+up` in Raycast
+both almost-maximize. The Hammerspoon one is the reliable one, since it is defined in this
+repo; the Raycast one is the nicer key.
 
 ## Credentials
 
