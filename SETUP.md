@@ -77,13 +77,21 @@ echo 'source "$HOME/rex/env.sh"' >> ~/.zshrc
 Without that line `~/rex/bin` is not on PATH, `$BROWSER` is unset, and the agent pane
 hooks never load. It is the single easiest thing to forget.
 
-### 6. Tools and launch agents
+### 6. SSH keys
+
+```sh
+./bin/restore-ssh
+```
+
+Then read **Rotate the keys** below. Do not skip it.
+
+### 7. Tools and launch agents
 
 ```sh
 ./install.sh
 ```
 
-### 7. macOS settings
+### 8. macOS settings
 
 ```sh
 ./macos-defaults.sh
@@ -97,13 +105,13 @@ The app pinning resolves space UUIDs from the live machine rather than copying t
 they differ on every Mac. If fewer than five desktops exist it says so and does nothing
 else; add them in Mission Control and run it again.
 
-### 8. Start SketchyBar
+### 9. Start SketchyBar
 
 ```sh
 brew services start sketchybar
 ```
 
-### 9. Inkdrop's vim plugin
+### 10. Inkdrop's vim plugin
 
 Inkdrop 6 ships no `ipm`, and the plugin is TypeScript with no built `lib`, so it has to
 be compiled:
@@ -130,10 +138,42 @@ None of this can be scripted.
   the keychain. Install it, set the hotkey to cmd+Space (moving Spotlight to ctrl+Space),
   and re-add the extensions and the cmd+shift app shortcuts by hand.
 - **Login items**: Raycast and Hammerspoon. Nothing else.
-- **SSH keys and hosts.** Nothing from `~/.ssh` is in this repo, on purpose. Copy the
-  private keys across by hand and recreate the host entries for the TV and the mini in
-  `~/.ssh/config`. `bin/tv` and `bin/mini-link` both expect those host names to exist;
-  run either one and it will tell you what it could not reach.
+- **SSH keys** are in this repo, under `secrets/ssh`. `./bin/restore-ssh` puts them in
+  `~/.ssh` with the right permissions, and never overwrites a key that is already there.
+  Then rotate them, which is the next section.
+
+## Rotate the keys
+
+The private keys for the TV and the mini are committed here so a fresh machine can reach
+both without needing a second device to hand. That is a deliberate trade, and it is meant
+to be temporary: anything committed stays in git history, so these keys should be replaced
+once the new machine works.
+
+Once `ssh tv` and `ssh mini` both answer:
+
+```sh
+ssh-keygen -t ed25519 -f ~/.ssh/id_lgtv_new -N ""
+ssh-keygen -t ed25519 -f ~/.ssh/id_mini_new -N ""
+
+ssh-copy-id -i ~/.ssh/id_lgtv_new.pub tv
+ssh-copy-id -i ~/.ssh/id_mini_new.pub mini
+```
+
+Check the new keys work, point `~/.ssh/config` at them, remove the old public keys from
+`~/.ssh/authorized_keys` on each host, then clear them from here:
+
+```sh
+cd ~/rex
+git rm -r --cached secrets/ssh
+rm -rf secrets/ssh
+echo "secrets/" >> .gitignore
+git commit -m "Remove the ssh keys after rotating them"
+git push
+```
+
+That stops them being handed to the next clone. It does not remove them from history, so
+the old keys stay readable to anyone who already has one. That is fine once the hosts no
+longer accept them, which is the point of doing this.
 
 ## Credentials
 

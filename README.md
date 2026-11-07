@@ -10,6 +10,10 @@ Read [SETUP.md](SETUP.md). It describes the whole machine in the order things ha
 happen, and says which parts a human still has to do. It is written to be handed to an
 agent: "here are my dotfiles, set this up".
 
+This repository contains ssh private keys, under `secrets/ssh`, so a fresh machine can
+reach the TV and the mini unaided. Keep it private, and rotate them once the machine is
+up: see **Rotate the keys** in SETUP.md.
+
 ## The Home session
 
 One Rex session, two tabs, built by `bin/comms`:

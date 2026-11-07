@@ -1,0 +1,32 @@
+#!/bin/sh
+# Put the ssh keys from secrets/ssh into ~/.ssh with the permissions ssh insists on.
+#
+# These keys are in this repository on purpose, so a fresh machine can reach the TV and
+# the mini without a second device. That is a deliberate trade and a temporary one:
+# rotate them once the machine is up. See "Rotate the keys" in SETUP.md.
+set -eu
+SRC="$HOME/rex/secrets/ssh"
+DEST="$HOME/.ssh"
+
+[ -d "$SRC" ] || { echo "no secrets/ssh in this clone"; exit 1; }
+mkdir -p "$DEST"
+chmod 700 "$DEST"
+
+for f in "$SRC"/*; do
+  name=$(basename "$f")
+  if [ -e "$DEST/$name" ]; then
+    echo "  kept existing  $name"
+    continue
+  fi
+  cp "$f" "$DEST/$name"
+  case "$name" in
+    *.pub) chmod 644 "$DEST/$name" ;;
+    *)     chmod 600 "$DEST/$name" ;;
+  esac
+  echo "  installed      $name"
+done
+
+echo
+echo "Now check them, then rotate:"
+echo "  ssh tv 'echo ok'      # the LG TV"
+echo "  ssh mini 'echo ok'    # the Mac mini"
