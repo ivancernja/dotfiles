@@ -49,6 +49,7 @@ cask "ghostty"
 cask "hammerspoon"
 cask "inkdrop"
 cask "finicky"
+cask "orion"
 cask "font-jetbrains-mono-nerd-font"
 
 # Not needed for the setup, but probably wanted. Uncomment what applies.

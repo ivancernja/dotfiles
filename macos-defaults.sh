@@ -48,7 +48,7 @@ import plistlib, subprocess, sys
 
 WANT = {
     1: ["com.superlogical.rex"],
-    2: ["com.google.Chrome"],
+    2: ["com.google.Chrome", "com.kagi.kagimacOS"],
     3: ["info.pkpk.inkdrop"],
     4: ["com.anysphere.sand"],
     5: ["com.apple.finder", "com.tinyspeck.slackmacgap", "com.hnc.Discord"],
