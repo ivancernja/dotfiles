@@ -3,6 +3,13 @@
 Everything that turns this terminal into the place the work happens. Rebuild it on a new
 machine with `./install.sh`, then `rex do comms`.
 
+
+## On a fresh Mac
+
+Read [SETUP.md](SETUP.md). It describes the whole machine in the order things have to
+happen, and says which parts a human still has to do. It is written to be handed to an
+agent: "here are my dotfiles, set this up".
+
 ## The Home session
 
 One Rex session, two tabs, built by `bin/comms`:

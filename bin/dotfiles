@@ -5,6 +5,7 @@
 #   dotfiles push    write ~/rex/home back onto this machine
 #
 # These are snapshots, not symlinks, so nothing breaks if the repo is missing.
+# Directories are rsynced; --delete only on pull, so a push never removes live files.
 set -e
 REPO="$HOME/rex/home"
 pairs="
@@ -20,9 +21,19 @@ config/sketchybar/plugins/battery.sh|$HOME/.config/sketchybar/plugins/battery.sh
 inkdrop/init.js|$HOME/Library/Application Support/inkdrop/init.js
 inkdrop/keymap.json|$HOME/Library/Application Support/inkdrop/keymap.json
 "
+# Directories, copied whole rather than file by file.
+dirs="
+config/nvim|$HOME/.config/nvim
+"
 
 case "${1:-pull}" in
   pull)
+    echo "$dirs" | while IFS='|' read -r rel live; do
+      [ -n "$rel" ] || continue
+      [ -d "$live" ] || continue
+      mkdir -p "$REPO/$rel"
+      rsync -a --delete --exclude='.git' "$live/" "$REPO/$rel/" && echo "  pulled   $rel/"
+    done
     echo "$pairs" | while IFS='|' read -r rel live; do
       [ -n "$rel" ] || continue
       [ -f "$live" ] || { echo "  missing  $live"; continue; }
@@ -31,6 +42,12 @@ case "${1:-pull}" in
     done
     ;;
   push)
+    echo "$dirs" | while IFS='|' read -r rel live; do
+      [ -n "$rel" ] || continue
+      [ -d "$REPO/$rel" ] || continue
+      mkdir -p "$live"
+      rsync -a "$REPO/$rel/" "$live/" && echo "  pushed   $rel/"
+    done
     echo "$pairs" | while IFS='|' read -r rel live; do
       [ -n "$rel" ] || continue
       [ -f "$REPO/$rel" ] || continue

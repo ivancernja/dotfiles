@@ -347,18 +347,3 @@ if (document.body) {
 } else {
   document.addEventListener('DOMContentLoaded', installHints)
 }
-
-
-// ---------------------------------------------------------------------------
-// Local plugin bootstrap: executable Rex runbooks in Markdown previews.
-//
-// The plugin is kept as a standalone package so this line can be removed once
-// it is installed through Inkdrop's package manager.
-
-const rexRunbooksPath = '/Users/ivan/inkdrop-rex-runbooks/lib/index.js'
-const rexRunbooksCorePath = '/Users/ivan/inkdrop-rex-runbooks/lib/runbook.js'
-const cachedRexRunbooks = require.cache[require.resolve(rexRunbooksPath)]
-if (cachedRexRunbooks) cachedRexRunbooks.exports.deactivate(inkdrop)
-delete require.cache[require.resolve(rexRunbooksPath)]
-delete require.cache[require.resolve(rexRunbooksCorePath)]
-require(rexRunbooksPath).activate(inkdrop)

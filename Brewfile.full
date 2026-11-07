@@ -1,0 +1,172 @@
+tap "encoredev/tap", trusted: true
+tap "entireio/tap", trusted: true
+tap "felixkratz/formulae", "https://github.com/FelixKratz/homebrew-formulae"
+tap "saragordic/tap", trusted: true
+# Icons for the GNOME project
+brew "adwaita-icon-theme"
+# Email client that runs in your terminal
+brew "aerc"
+# Download with resuming and segmented downloading
+brew "aria2"
+# Improved shell history for zsh, bash, fish and nushell
+brew "atuin"
+# Clone of cat(1) with syntax highlighting and Git integration
+brew "bat"
+# Resource monitor. C++ version and continuation of bashtop and bpytop
+brew "btop"
+# Multi-shell multi-command argument completer
+brew "carapace"
+# Cross-platform make
+brew "cmake"
+# Secure runtime for JavaScript and TypeScript
+brew "deno"
+# Load/unload environment variables based on $PWD
+brew "direnv"
+# Disk Usage/Free Utility - a better 'df' alternative
+brew "duf"
+# More intuitive version of du in rust
+brew "dust"
+# Modern, maintained replacement for ls
+brew "eza"
+# Like neofetch, but much faster because written mostly in C
+brew "fastfetch"
+# Simple, fast and user-friendly alternative to find
+brew "fd"
+# Play, record, convert, and stream select audio and video codecs
+brew "ffmpeg"
+# Free lossless audio codec
+brew "flac"
+# Command-line tools for fly.io services
+brew "flyctl"
+# Command-line fuzzy finder written in Go
+brew "fzf"
+# GitHub command-line tool
+brew "gh"
+# Syntax-highlighting pager for git and diff output
+brew "git-delta"
+# Render markdown on the CLI
+brew "glow"
+# Open source programming language to build simple/reliable/efficient software
+brew "go"
+# Toolkit for creating graphical user interfaces
+brew "gtk4"
+# Post-modern modal text editor
+brew "helix"
+# Command-line benchmarking tool
+brew "hyperfine"
+# Get events and tasks from the macOS calendar database
+brew "ical-buddy"
+# Command-line pager for JSON data
+brew "jless"
+# Lightweight and flexible command-line JSON processor
+brew "jq"
+# Simple terminal UI for git commands
+brew "lazygit"
+# LLM inference in C/C++
+brew "llama.cpp"
+# Media player based on MPlayer and mplayer2
+brew "mpv"
+# Incremental parsing library
+brew "tree-sitter"
+# Ambitious Vim-fork focused on extensibility and agility
+brew "neovim"
+# Interpreted, interactive, object-oriented programming language
+brew "python@3.14"
+# Port scanning utility for large networks
+brew "nmap"
+# Open-source, cross-platform JavaScript runtime environment
+brew "node"
+# Modern shell for the GitHub era
+brew "nushell"
+# Development kit for the Java programming language
+brew "openjdk@17"
+# Drop-in replacement for Terraform. Infrastructure as Code Tool
+brew "opentofu"
+# Execute binaries from Python packages in isolated environments
+brew "pipx"
+# PDF rendering library (based on the xpdf-3.0 code base)
+brew "poppler"
+# Modern replacement for ps written in Rust
+brew "procs"
+# Protocol buffers (Google's data interchange format)
+brew "protobuf"
+# GNOME Python bindings (based on GObject Introspection)
+brew "pygobject3"
+# Generic machine emulator and virtualizer
+brew "qemu"
+# Search tool like grep and The Silver Searcher
+brew "ripgrep"
+# Intuitive find & replace CLI
+brew "sd"
+# Cross-shell prompt for astronauts
+brew "starship"
+# Program that allows you to count code, quickly
+brew "tokei"
+# Parser generator tool
+brew "tree-sitter-cli"
+# Pager/text based browser
+brew "w3m"
+# Universal WebAssembly Runtime
+brew "wasmer"
+# Standalone JIT-style runtime for WebAssembly, using Cranelift
+brew "wasmtime"
+# Execute commands when watched files change
+brew "watchexec"
+# Port of OpenAI's Whisper model in C/C++
+brew "whisper.cpp"
+# Friendly and fast tool for sending HTTP requests
+brew "xh"
+# Blazing fast terminal file manager written in Rust, based on async I/O
+brew "yazi"
+# Download Youtube Video in Golang
+brew "youtubedr"
+# Programming language designed for robustness, optimality, and clarity
+brew "zig"
+# Shell extension to navigate your filesystem faster
+brew "zoxide"
+# Fish-like fast/unobtrusive autosuggestions for zsh
+brew "zsh-autosuggestions"
+# Fish shell like syntax highlighting for zsh
+brew "zsh-syntax-highlighting"
+# The static analysis-powered Go framework for building backend applications
+brew "encoredev/tap/encore", trusted: true
+# Custom macOS statusbar with shell plugin, interaction and graph support
+brew "felixkratz/formulae/sketchybar", trusted: true
+# Command-line tools for building and debugging Android apps
+cask "android-commandlinetools"
+# Android SDK component
+cask "android-platform-tools"
+# 3D creation suite
+cask "blender"
+# Terminal-based AI coding assistant
+cask "claude-code"
+# CLI for Entire
+cask "entireio/tap/entire"
+# Utility for customizing which browser to start
+cask "finicky"
+cask "font-jetbrains-mono-nerd-font"
+# Terminal emulator that uses platform-native UI and GPU acceleration
+cask "ghostty"
+# Desktop automation application
+cask "hammerspoon"
+# Markdown editor
+cask "inkdrop"
+# Keyboard customiser
+# Reverse proxy, secure introspectable tunnels to localhost
+cask "ngrok"
+# WebKit based web browser
+# Imaging utility to install operating systems to a microSD card
+cask "raspberry-pi-imager"
+# Menu-bar app that wraps windows in knitted borders coloured after each app
+cask "saragordic/tap/window-sweaters", trusted: true
+go "golang.org/x/tools/cmd/goimports"
+go "github.com/sqlc-dev/sqlc/cmd/sqlc"
+cargo "cargo-component"
+cargo "cargo-zigbuild"
+cargo "vtracer"
+npm "bun"
+npm "carbonyl"
+npm "clerk"
+npm "corepack"
+npm "shersh"
+npm "vercel"
