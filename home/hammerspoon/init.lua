@@ -235,3 +235,94 @@ local almostHotkey = hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "m", function()
     hs.alert.show("not a window this resizes")
   end
 end)
+
+-- One window per workspace.
+-- When a second window appears on a desktop, the ones you are not looking at are
+-- minimized rather than closed or moved: minimizing is reversible and loses nothing,
+-- and moving a window between Spaces no longer works on this macOS anyway.
+--
+-- Ctrl+Alt+Cmd+O turns it on and off, and the setting survives a reload.
+local SOLO_KEY = "soloWorkspace.enabled"
+local soloOn = hs.settings.get(SOLO_KEY)
+if soloOn == nil then soloOn = true end
+
+-- The same exclusions as the resizer, plus apps whose extra windows are the point.
+local soloExempt = {
+  ["Raycast"] = true, ["Hammerspoon"] = true, ["Finicky"] = true,
+  ["Granola"] = true, ["System Settings"] = true, ["Control Center"] = true,
+  ["Spotlight"] = true, ["loginwindow"] = true, ["Finder"] = true,
+}
+
+local soloPending = nil
+
+local function windowsOnThisSpace()
+  local uuid = hs.screen.mainScreen():getUUID()
+  local here = hs.spaces.activeSpaceOnScreen(uuid)
+  local found = {}
+  for _, win in ipairs(hs.window.allWindows()) do
+    pcall(function()
+      if win:isMinimized() or win:isFullScreen() or not win:isStandard() then return end
+      local app = win:application()
+      if app and soloExempt[app:name()] then return end
+      local f = win:frame()
+      if f.w < 400 or f.h < 300 then return end
+      -- allWindows() reaches across Spaces, so ask which Space this one is really on.
+      for _, id in ipairs(hs.spaces.windowSpaces(win) or {}) do
+        if id == here then table.insert(found, win) return end
+      end
+    end)
+  end
+  return found
+end
+
+-- Nothing is moved, closed or hidden: the rule is a reminder, not a bouncer.
+-- The last set of windows seen is remembered so the message appears when another one
+-- arrives, rather than every time focus moves while two are already open.
+local soloSeen = {}
+
+local function enforceSolo(announce)
+  if not soloOn then return end
+  local windows = windowsOnThisSpace()
+
+  local now, fresh = {}, false
+  for _, win in ipairs(windows) do
+    local id = win:id()
+    if id then
+      now[id] = true
+      if not soloSeen[id] then fresh = true end
+    end
+  end
+  soloSeen = now
+
+  if #windows <= 1 then return end
+  if not (fresh or announce) then return end
+
+  local names = {}
+  for _, win in ipairs(windows) do
+    local app = win:application()
+    if app then table.insert(names, app:name()) end
+  end
+  hs.alert.show("only one window per desktop, and there are " .. #windows ..
+                " here: " .. table.concat(names, ", "), 2.5)
+end
+
+-- Debounced: opening a window often fires several events, and apps settle a moment
+-- after the window appears.
+local function queueSolo()
+  if not soloOn then return end
+  if soloPending then soloPending:stop() end
+  soloPending = hs.timer.doAfter(0.7, enforceSolo)
+end
+
+local soloFilter = hs.window.filter.new(nil)
+soloFilter:subscribe(hs.window.filter.windowCreated, queueSolo)
+soloFilter:subscribe(hs.window.filter.windowFocused, queueSolo)
+soloFilter:subscribe(hs.window.filter.windowUnminimized, queueSolo)
+
+local soloHotkey = hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "o", function()
+  soloOn = not soloOn
+  hs.settings.set(SOLO_KEY, soloOn)
+  hs.alert.show(soloOn and "one window per desktop: on"
+                        or "one window per desktop: off")
+  if soloOn then enforceSolo() end
+end)
