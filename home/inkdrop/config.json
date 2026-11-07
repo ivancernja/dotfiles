@@ -1,0 +1,24 @@
+{
+  "*": {
+    "core": {
+      "db": {
+        "machineId": "Y0pASMYCTqOwUF3QOC2jV"
+      },
+      "mainWindow": {
+        "hiddenComponents": {
+          "sidebar-menu": [
+            "SideBarMenuTagList",
+            "SideBarMenuStatusList"
+          ]
+        },
+        "noteListBar": {
+          "w": 219
+        }
+      },
+      "theme": "default-dark"
+    },
+    "editor": {
+      "fontSize": 22
+    }
+  }
+}

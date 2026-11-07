@@ -130,6 +130,10 @@ None of this can be scripted.
   the keychain. Install it, set the hotkey to cmd+Space (moving Spotlight to ctrl+Space),
   and re-add the extensions and the cmd+shift app shortcuts by hand.
 - **Login items**: Raycast and Hammerspoon. Nothing else.
+- **SSH keys and hosts.** Nothing from `~/.ssh` is in this repo, on purpose. Copy the
+  private keys across by hand and recreate the host entries for the TV and the mini in
+  `~/.ssh/config`. `bin/tv` and `bin/mini-link` both expect those host names to exist;
+  run either one and it will tell you what it could not reach.
 
 ## Credentials
 

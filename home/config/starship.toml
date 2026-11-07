@@ -1,0 +1,73 @@
+format = """$directory$git_branch$git_status$fill$cmd_duration$jobs\n$character"""
+right_format = "$status"
+add_newline = true
+palette = "whitby_bay"
+
+[palettes.whitby_bay]
+pink = "#ff7ed1"
+mauve = "#b696f7"
+red = "#ff5d57"
+peach = "#ff7a72"
+yellow = "#f5f28a"
+green = "#4df08a"
+teal = "#72fa9e"
+sky = "#90ecf6"
+sapphire = "#aefbf8"
+blue = "#b696f7"
+lavender = "#d0b0fb"
+text = "#f7f7ee"
+subtext0 = "#a4a6a7"
+overlay0 = "#84868b"
+surface1 = "#434861"
+
+[directory]
+style = "bold blue"
+truncation_length = 4
+truncate_to_repo = false
+read_only = " 󰌾"
+
+[git_branch]
+symbol = " "
+style = "mauve"
+format = "[$symbol$branch]($style) "
+
+[git_status]
+style = "yellow"
+format = "([$all_status$ahead_behind]($style) )"
+
+[fill]
+symbol = " "
+
+[cmd_duration]
+min_time = 1000
+format = "[$duration](overlay0) "
+
+[jobs]
+symbol = "󰜎 "
+style = "peach"
+
+[character]
+success_symbol = "[❯](green)"
+error_symbol = "[❯](red)"
+vimcmd_symbol = "[❮](blue)"
+
+[status]
+disabled = false
+format = "[$status]($style)"
+
+[nodejs]
+symbol = " "
+format = "[$symbol($version)]($style) "
+
+[python]
+symbol = " "
+format = "[$symbol($version)]($style) "
+
+[rust]
+symbol = " "
+format = "[$symbol($version)]($style) "
+
+[golang]
+symbol = " "
+format = "[$symbol($version)]($style) "
+

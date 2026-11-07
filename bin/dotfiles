@@ -20,6 +20,10 @@ config/sketchybar/plugins/clock.sh|$HOME/.config/sketchybar/plugins/clock.sh
 config/sketchybar/plugins/battery.sh|$HOME/.config/sketchybar/plugins/battery.sh
 inkdrop/init.js|$HOME/Library/Application Support/inkdrop/init.js
 inkdrop/keymap.json|$HOME/Library/Application Support/inkdrop/keymap.json
+inkdrop/styles.css|$HOME/Library/Application Support/inkdrop/styles.css
+inkdrop/config.json|$HOME/Library/Application Support/inkdrop/config.json
+config/starship.toml|$HOME/.config/starship.toml
+gitconfig|$HOME/.gitconfig
 "
 # Directories, copied whole rather than file by file.
 dirs="

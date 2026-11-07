@@ -1,0 +1,150 @@
+/* Whitby Bay for Inkdrop. Keep the stock dark theme for structure and replace
+ * its semantic colour tokens so upgrades do not depend on brittle selectors. */
+@layer theme {
+  :root {
+    color-scheme: dark;
+
+    --whitby-bg: #272a38;
+    --whitby-surface: #2c2f3c;
+    --whitby-surface-subtle: #2f323f;
+    --whitby-surface-raised: #393c4a;
+    --whitby-border: #474a56;
+    --whitby-border-strong: #5b5e67;
+    --whitby-selection: #434861;
+    --whitby-fg: #f7f7ee;
+    --whitby-fg-bright: #fdfdfa;
+    --whitby-fg-muted: #a4a6a7;
+    --whitby-fg-faint: #84868b;
+    --whitby-accent: #b696f7;
+    --whitby-red: #ff5d57;
+    --whitby-green: #4df08a;
+    --whitby-yellow: #f5f28a;
+    --whitby-pink: #ff7ed1;
+    --whitby-cyan: #90ecf6;
+
+    --base-background-color: var(--whitby-bg);
+    --border-color: var(--whitby-border);
+    --primary-color: var(--whitby-accent);
+    --primary-color-hover: #c4adfa;
+    --primary-color-focus: #c4adfa;
+    --primary-color-active: #a986f3;
+    --primary-color-down: #9f7aed;
+    --link-color: var(--whitby-cyan);
+    --link-hover-color: var(--whitby-accent);
+
+    --sidebar-background: var(--whitby-surface);
+    --sidebar-border-right: 1px solid var(--whitby-border);
+    --sidebar-menu-action-color: var(--whitby-fg-muted);
+    --sidebar-menu-action-hover-color: var(--whitby-fg-bright);
+
+    --note-list-bar-background: var(--whitby-surface-subtle);
+    --note-list-bar-border-right: 1px solid var(--whitby-border);
+    --note-list-bar-section-header-background: var(--whitby-surface-subtle);
+    --note-list-bar-section-header-border-bottom: 1px solid var(--whitby-border);
+    --note-list-bar-section-header-text-color: var(--whitby-fg-muted);
+    --note-list-bar-pinned-section-header-background: var(--whitby-surface-subtle);
+    --note-list-view-item-color: var(--whitby-fg-muted);
+    --note-list-view-item-header-color: var(--whitby-fg);
+    --note-list-view-item-date-color: var(--whitby-fg-faint);
+    --note-list-view-item-inactive-background: transparent;
+    --note-list-view-item-active-background: var(--whitby-surface-raised);
+    --note-list-view-item-selected-background: var(--whitby-selection);
+    --note-list-view-item-separator-border: 1px solid var(--whitby-border);
+    --note-search-bar-background: var(--whitby-surface-subtle);
+    --note-search-bar-input-background: var(--whitby-bg);
+    --note-search-bar-input-border: 1px solid var(--whitby-border);
+
+    --editor-background: var(--whitby-bg);
+    --editor-background-color: var(--whitby-bg);
+    --editor-foreground-color: var(--whitby-fg);
+    --editor-caret-color: var(--whitby-accent);
+    --editor-gutter-background-color: var(--whitby-bg);
+    --editor-gutter-background-solid-color: var(--whitby-bg);
+    --editor-gutter-color: var(--whitby-fg-faint);
+    --editor-gutter-border-right-color: transparent;
+    --editor-active-line-background-color: color-mix(in srgb, var(--whitby-surface-raised) 55%, transparent);
+    --editor-active-line-gutter-background-color: var(--whitby-surface-subtle);
+    --editor-selection-background: var(--whitby-selection);
+    --editor-focused-selection-background: var(--whitby-selection);
+    --editor-selection-foreground: var(--whitby-fg-bright);
+    --editor-placeholder-color: var(--whitby-fg-faint);
+    --editor-panel-background-color: var(--whitby-surface);
+    --editor-panel-border-color: var(--whitby-border);
+    --editor-panel-color: var(--whitby-fg);
+    --editor-tooltip-background-color: var(--whitby-surface-raised);
+    --editor-tooltip-border-color: var(--whitby-border-strong);
+    --editor-tooltip-autocomplete-item-selected-background-color: var(--whitby-selection);
+    --editor-tooltip-autocomplete-item-selected-color: var(--whitby-fg-bright);
+
+    --input-background: var(--whitby-surface-subtle);
+    --input-color: var(--whitby-fg);
+    --input-border: 1px solid var(--whitby-border);
+    --input-focus-background: var(--whitby-bg);
+    --input-focus-color: var(--whitby-fg-bright);
+    --input-focus-border-color: var(--whitby-accent);
+    --input-highlight-background: var(--whitby-selection);
+    --input-highlight-color: var(--whitby-fg-bright);
+    --input-placeholder-color: var(--whitby-fg-faint);
+
+    --button-background: var(--whitby-surface-raised);
+    --button-border: 1px solid var(--whitby-border);
+    --button-text-color: var(--whitby-fg);
+    --button-hover-background-color: var(--whitby-selection);
+    --button-hover-color: var(--whitby-fg-bright);
+    --button-focus-background-color: var(--whitby-selection);
+    --button-focus-color: var(--whitby-fg-bright);
+    --primary-button-background-color: var(--whitby-accent);
+    --primary-button-hover-background-color: #c4adfa;
+    --primary-button-text-color: var(--whitby-bg);
+
+    --selection-list-active-background: var(--whitby-selection);
+    --selection-list-active-color: var(--whitby-fg-bright);
+    --selection-list-hover-background: var(--whitby-surface-raised);
+    --selection-list-hover-color: var(--whitby-fg);
+
+    --note-status-active: var(--whitby-cyan);
+    --note-status-completed: var(--whitby-green);
+    --note-status-dropped: var(--whitby-red);
+    --note-status-onhold: var(--whitby-yellow);
+  }
+
+  html,
+  body,
+  #app {
+    background: var(--whitby-bg);
+    color: var(--whitby-fg);
+  }
+
+  ::selection {
+    background: var(--whitby-selection);
+    color: var(--whitby-fg-bright);
+  }
+
+  .mde-preview {
+    color: var(--whitby-fg);
+  }
+
+  .mde-preview a {
+    color: var(--whitby-cyan);
+  }
+
+  .mde-preview a:hover,
+  .mde-preview a:focus-visible {
+    color: var(--whitby-accent);
+  }
+
+  .mde-preview blockquote {
+    color: var(--whitby-fg-muted);
+    border-left-color: var(--whitby-accent);
+  }
+
+  .mde-preview code,
+  .mde-preview pre {
+    background: var(--whitby-surface-subtle);
+    border-color: var(--whitby-border);
+  }
+
+  :focus-visible {
+    outline-color: var(--whitby-accent);
+  }
+}

@@ -1,0 +1,11 @@
+[user]
+	email = cernja@protonmail.com
+	name = Ivan Cernja
+[credential "https://github.com"]
+	helper = 
+	helper = !/opt/homebrew/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper = 
+	helper = !/opt/homebrew/bin/gh auth git-credential
+[include]
+	path = /Users/ivan/.dotfiles/git/delta.conf

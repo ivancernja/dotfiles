@@ -89,7 +89,20 @@ step "Apply the hotkeys without logging out"
 /System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u 2>/dev/null \
   && ok "hotkey table reloaded" || todo "log out and back in to pick up the hotkeys"
 
+step "Wallpaper"
+WALL="$HOME/rex/assets/wallpaper.jpg"
+if [ -f "$WALL" ]; then
+  if osascript -e "tell application \"System Events\" to set picture of every desktop to \"$WALL\"" >/dev/null 2>&1; then
+    ok "wallpaper set"
+  else
+    todo "set the wallpaper by hand from ~/rex/assets/wallpaper.jpg (System Events needs Accessibility)"
+  fi
+else
+  todo "no wallpaper in ~/rex/assets"
+fi
+
 printf '\n%sStill needs you:%s\n' "$B" "$R"
 todo "create five desktops in Mission Control if there are fewer, then run this again"
 todo "log out once, for the menu bar and any new desktops"
 todo "grant Accessibility to Hammerspoon in System Settings, Privacy and Security"
+todo "recreate the tv and mini ssh hosts and copy their keys, see SETUP.md"
